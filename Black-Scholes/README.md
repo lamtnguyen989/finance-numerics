@@ -21,7 +21,7 @@ therefore exponentiating gives
 
 $$\begin{align*}
 	S_t = S_0\exp\left[\left(\mu -\frac{\sigma^2}{2}\right)t + \sigma B_t \right]
-\end{align*}$$.
+\end{align*}$$
 
 In particular, the Black-Scholes model assumes that the stock price $S$ follows the GBM and so its time-based value then can be modeled as the stochastic process $V(S,t)$ where under the Itô formula
 
