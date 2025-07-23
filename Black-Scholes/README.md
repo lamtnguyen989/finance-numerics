@@ -40,11 +40,11 @@ $$\begin{align*}
 so since the portfolio is riskless, we can assume a risk-free return rate $r$ and so we can model the change of this portfolio as $d\Pi = r\Pi dt$, after subtituting in values, we see that 
 
 $$\begin{align*}
-	-\left(\frac{\partial V}{\partial t}+ \frac{(\sigma S)^2}{2}\right)dt = r\left(S\frac{\partial V}{\partial S} - V\right)dt \implies -\left(\frac{\partial V}{\partial t}+ \frac{(\sigma S)^2}{2} -r\left(S\frac{\partial V}{\partial S} - V\right)\right)dt = 0
+	-\left(\frac{\partial V}{\partial t}+ \frac{(\sigma S)^2}{2}\right)dt = r\left(S\frac{\partial V}{\partial S} - V\right)dt \implies -\left(\frac{\partial V}{\partial t}+ \frac{(\sigma S)^2}{2} + r\left(S\frac{\partial V}{\partial S} - V\right)\right)dt = 0
 \end{align*}$$
 
 so since $dt>0$, we arrive at the infamous PDE,
 
 $$\begin{align*}
-	\frac{\partial V}{\partial t}+ \frac{\sigma^2 S^2}{2} -rS\frac{\partial V}{\partial S} - rV= 0
+	\frac{\partial V}{\partial t}+ \frac{\sigma^2 S^2}{2} + rS\frac{\partial V}{\partial S} - rV= 0
 \end{align*}$$
