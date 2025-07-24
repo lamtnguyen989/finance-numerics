@@ -43,7 +43,7 @@ struct Black_Scholes_parameters
     double T = 0.25;         // Expiry time
 
     unsigned int n_price_cells = 100;
-    unsigned int n_time_steps = 200;
+    unsigned int n_time_steps = 300;
 };
 
 /* ------------------------------------------------------------------------------
@@ -317,7 +317,7 @@ void BlackScholes<dim>::implicit_Euler_solve()
         apply_boundary_conditions(next_time);
 
         // Output timestep
-        //output_timestep(next_time);
+        if (std::abs(next_time) < 1e-8) {output_timestep(next_time);}
 
         // Storing computed solution
         all_solutions.push_back(solution);
