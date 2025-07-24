@@ -22,6 +22,8 @@
 #include <iostream>
 #include <fstream>
 
+#define EPSILON 1e-14
+
 using namespace dealii;
 
 /* ------------------------------------------------------------------------------
@@ -54,7 +56,7 @@ class TerminalCondition : public Function<dim>
             , params(parameters)
         {}
 
-        virtual double value(const Point<dim> p, const unsigned int /*component*/) const override
+        virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
         {
             const double S = p[0];
             return std::max(S - params.K, 0.0);
@@ -90,6 +92,7 @@ class BlackScholes
         void make_and_setup_system();
         void applying_terminal_condition();
         void assemble_system_matrices();
+        void solve();
 
         Black_Scholes_parameters params;
         const unsigned int degree;
@@ -108,6 +111,7 @@ class BlackScholes
 
         Vector<double>              solution;
         Vector<double>              old_solution;
+        std::vector<Vector<double>> all_solutions;
         Vector<double>              rhs;
 };
 
@@ -148,26 +152,71 @@ void BlackScholes<dim>::make_and_setup_system()
     std::cout << "Price range: [" << params.S_min << ", " << params.S_max << "]" << std::endl;
     std::cout << "Discretized with: " << params.n_price_cells << std::endl;
     std::cout << "Actual active cells number: " << triangulation.n_active_cells() << std::endl;
-    std::cout << "Number of DoFs: " << triangulation.n_active_cells() << std::endl;
+    std::cout << "Number of DoFs: " << n_dofs << std::endl;
 }
 
 template <int dim>
 void BlackScholes<dim>::applying_terminal_condition()
 {
+    // Interpolating terminal condition
+    TerminalCondition<dim> terminal_condition(params);
+    VectorTools::interpolate(dof_handler, terminal_condition, solution);
 
+    // Storing the interpolated condition
+    all_solutions.push_back(solution);
+    old_solution = solution;
 }
 
 template <int dim>
 void BlackScholes<dim>::assemble_system_matrices()
 {
+    // Zero out the matrices
+    mass_matrix = 0;
+    stiffness_matrix = 0;
+
+    // Initializing quadrature rules and Finite Element values
+    QGauss<dim> quadrature(2*degree + 1);
+    FEValues<dim> fe_values(fe, quadrature,
+                    update_values | update_gradients | update_quadrature_points | update_JxW_values);
     
+    // Looping through cells to assemble the matrices
+    FullMatrix<double> cell_mass_matrix(fe.dofs_per_cell, fe.dofs_per_cell);
+    FullMatrix<double> cell_stiffness_matrix(fe.dofs_per_cell, fe.dofs_per_cell);
+    std::vector<unsigned int> local_dof_indices(fe.dofs_per_cell);
+    
+    for (auto cell : dof_handler.active_cell_iterators())
+    {
+        fe_values.reinit(cell);
+        cell_mass_matrix = 0;
+        cell_stiffness_matrix = 0;
+        for (unsigned int q_index = 0; q_index < quadrature.size(); q_index++)
+        {
+            for (unsigned int i = 0; i< fe.dofs_per_cell; i++)
+            {
+                for (unsigned int j = 0; j < fe.dofs_per_cell; j++)
+                {
+                    cell_mass_matrix(i, j) += fe_values.shape_value(i,q_index) * fe_values.shape_value(j,q_index)
+                                            * fe_values.JxW(q_index);
+                    
+                    // TODO: Stiffness matrix assembly
+                }
+            }
+        }
+    }
 }
 
+template <int dim>
+void BlackScholes<dim>::solve()
+{
+
+}
 
 template <int dim>
 void BlackScholes<dim>::run()
 {
     make_and_setup_system();
+    applying_terminal_condition();
+    assemble_system_matrices();
 }
 
 /* ------------------------------------------------------------------------------
