@@ -185,7 +185,7 @@ void BlackScholes<dim>::make_and_setup_system()
 
     // Output discretization info
     std::cout << "Price range: [" << params.S_min << ", " << params.S_max << "]" << std::endl;
-    std::cout << "Discretized with: " << params.n_price_cells << std::endl;
+    std::cout << "Discretized with: " << params.n_price_cells << " cells." << std::endl;
     std::cout << "Actual active cells number: " << triangulation.n_active_cells() << std::endl;
     std::cout << "Number of DoFs: " << n_dofs << std::endl;
 }
@@ -200,6 +200,9 @@ void BlackScholes<dim>::applying_terminal_condition()
     // Storing the interpolated condition
     all_solutions.push_back(solution);
     old_solution = solution;
+
+    // Output
+    //output_timestep(params.T);
 }
 
 template <int dim>
@@ -210,7 +213,7 @@ void BlackScholes<dim>::assemble_system_matrices()
     stiffness_matrix = 0;
 
     // Initializing quadrature rules and Finite Element values
-    QGauss<dim> quadrature(2*degree + 1);
+    QGauss<dim> quadrature(degree + 1);
     FEValues<dim> fe_values(fe, quadrature,
                     update_values | update_gradients | update_quadrature_points | update_JxW_values);
     
@@ -258,7 +261,7 @@ void BlackScholes<dim>::assemble_system_matrices()
         constraints.distribute_local_to_global(cell_mass_matrix, local_dof_indices, mass_matrix);
         constraints.distribute_local_to_global(cell_stiffness_matrix, local_dof_indices, stiffness_matrix);
     }
-    std::cout << "Mass and Stiffness matrices assembly finished." << std::endl;
+    //std::cout << "Mass and Stiffness matrices assembly finished." << std::endl;
 }
 
 template <int dim>
@@ -290,26 +293,31 @@ void BlackScholes<dim>::implicit_Euler_solve()
     // Time-step size (note that we explicitly control this)
     double d_tau = (params.T - params.t_0) / (params.n_time_steps);
 
-    // Initialize system_matrix and (direct) solver with matrix factorization
-    system_matrix.copy_from(mass_matrix);
-    system_matrix.add(-d_tau, stiffness_matrix);
+    // Initialize (direct) solver
     SparseDirectUMFPACK solver;
-    solver.initialize(system_matrix);
     
     // Time-stepping loop
     for (unsigned int n = 0; n < params.n_time_steps; n++)
     {
         double current_time = params.T - n*d_tau;
+        double next_time = current_time - d_tau;
 
-        // RHS at the current_time
+        // Initialize and factorize system matrix at time-step
+        assemble_system_matrices();
+        system_matrix.copy_from(mass_matrix);
+        system_matrix.add(-d_tau, stiffness_matrix);
+        solver.initialize(system_matrix);
+
+
+        // RHS
         mass_matrix.vmult(rhs, old_solution);
 
         // Solving the equation
-        apply_boundary_conditions(current_time);
         solver.vmult(solution, rhs);
+        apply_boundary_conditions(next_time);
 
         // Output timestep
-        //output_timestep(current_time);
+        //output_timestep(next_time);
 
         // Storing computed solution
         all_solutions.push_back(solution);
@@ -337,7 +345,6 @@ void BlackScholes<dim>::run()
 {
     make_and_setup_system();
     applying_terminal_condition();
-    assemble_system_matrices();
 
     implicit_Euler_solve();
 
