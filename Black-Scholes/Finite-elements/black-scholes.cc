@@ -9,6 +9,7 @@
 #include <deal.II/lac/full_matrix.h>
 #include <deal.II/lac/solver_gmres.h>
 #include <deal.II/lac/precondition_block.h>
+#include <deal.II/lac/sparse_direct.h>
 #include <deal.II/grid/tria.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/grid_out.h>
@@ -16,11 +17,13 @@
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_tools.h>
 #include <deal.II/numerics/vector_tools.h>
+#include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/data_out.h>
 
 
 #include <iostream>
 #include <fstream>
+#include <string>
 
 #define EPSILON 1e-14
 
@@ -37,10 +40,10 @@ struct Black_Scholes_parameters
     double S_max = 150;     // Maximum asset price
     double K = 100;         // Strike price
     double t_0 = 0;         // Initial time
-    double T = 1.0;         // Expiry time
+    double T = 0.25;         // Expiry time
 
     unsigned int n_price_cells = 100;
-    unsigned int n_time_steps = 150;
+    unsigned int n_time_steps = 200;
 };
 
 /* ------------------------------------------------------------------------------
@@ -72,18 +75,21 @@ template <int dim>
 class MaxPriceCondition : public Function<dim>
 {
     public:
-        MaxPriceCondition(Black_Scholes_parameters &parameters)
+        MaxPriceCondition(Black_Scholes_parameters &parameters, double t)
             : Function<dim> ()
             , params(parameters)
-        {}
+        {
+            tau = params.T - t;
+        }
 
         virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
         {
-            double S_max = p[0];    // TODO: Test this
-            return 0.0;             // TODO: Finish this
+            double S_max = p[0];
+            return S_max - params.K * std::exp(-params.r * tau);
         }
     private:
         Black_Scholes_parameters params;
+        double tau;
 };
 
 
@@ -119,7 +125,10 @@ class BlackScholes
         void make_and_setup_system();
         void applying_terminal_condition();
         void assemble_system_matrices();
-        void solve();
+        void apply_boundary_conditions(double t);
+        void implicit_Euler_solve();
+        void output_timestep(double t);
+        void output_time_evolution();
 
         Black_Scholes_parameters params;
         const unsigned int degree;
@@ -127,7 +136,6 @@ class BlackScholes
         FE_Q<dim>                   fe;
         Triangulation<dim>          triangulation;
         DoFHandler<dim>             dof_handler;
-
 
         AffineConstraints<double>   constraints;
         SparseMatrix<double>        mass_matrix;
@@ -216,6 +224,7 @@ void BlackScholes<dim>::assemble_system_matrices()
         fe_values.reinit(cell);
         cell_mass_matrix = 0;
         cell_stiffness_matrix = 0;
+
         for (unsigned int q_index = 0; q_index < quadrature.size(); q_index++)
         {
             double S = fe_values.quadrature_point(q_index)[0];
@@ -249,14 +258,79 @@ void BlackScholes<dim>::assemble_system_matrices()
         constraints.distribute_local_to_global(cell_mass_matrix, local_dof_indices, mass_matrix);
         constraints.distribute_local_to_global(cell_stiffness_matrix, local_dof_indices, stiffness_matrix);
     }
-    std::cout << "System matrices assembly finished." << std::endl;
+    std::cout << "Mass and Stiffness matrices assembly finished." << std::endl;
 }
 
 template <int dim>
-void BlackScholes<dim>::solve()
+void BlackScholes<dim>::apply_boundary_conditions(double t)
 {
+    std::map<unsigned int, double> boundary_values;
+    
+    // S_min boundary interpolation
+    unsigned int boundary_id_min = 0;
+    VectorTools::interpolate_boundary_values(dof_handler, boundary_id_min, MinPriceCondition<dim>(params), boundary_values);
 
+    // S_max boundary interpolation
+    unsigned int boundary_id_max = 1;
+    VectorTools::interpolate_boundary_values(dof_handler, boundary_id_max, MaxPriceCondition<dim>(params, t), boundary_values);
+
+    // Applying BCs to system_matrix and RHS
+    MatrixTools::apply_boundary_values(boundary_values, system_matrix, solution,rhs);
 }
+
+template <int dim>
+void BlackScholes<dim>::implicit_Euler_solve()
+{
+    /*
+        Coefficient DiffEq system (for mass matrix M and stiffness matrix K): M(du/d_tau) = Ku
+        Implicit Euler temporal discretization: du/d_tau = (u_{n+1} - u_n) / d_tau
+        Arising system: (M - d_tau*K) u_{n+1} = Mu_n
+    */
+
+    // Time-step size (note that we explicitly control this)
+    double d_tau = (params.T - params.t_0) / (params.n_time_steps);
+
+    // Initialize system_matrix and (direct) solver with matrix factorization
+    system_matrix.copy_from(mass_matrix);
+    system_matrix.add(-d_tau, stiffness_matrix);
+    SparseDirectUMFPACK solver;
+    solver.initialize(system_matrix);
+    
+    // Time-stepping loop
+    for (unsigned int n = 0; n < params.n_time_steps; n++)
+    {
+        double current_time = params.T - n*d_tau;
+
+        // RHS at the current_time
+        mass_matrix.vmult(rhs, old_solution);
+
+        // Solving the equation
+        apply_boundary_conditions(current_time);
+        solver.vmult(solution, rhs);
+
+        // Output timestep
+        //output_timestep(current_time);
+
+        // Storing computed solution
+        all_solutions.push_back(solution);
+        old_solution = solution;
+    }
+}
+
+template <int dim>
+void BlackScholes<dim>::output_timestep(double t)
+{
+    DataOut<dim> data_out;
+    data_out.attach_dof_handler(dof_handler);
+    data_out.add_data_vector(solution, "V");
+    data_out.build_patches();
+
+    std::string status = "t=" + std::to_string(t) + ".vtu";
+
+    std::ofstream output(status);
+    data_out.write_vtu(output);
+}
+
 
 template <int dim>
 void BlackScholes<dim>::run()
@@ -264,6 +338,13 @@ void BlackScholes<dim>::run()
     make_and_setup_system();
     applying_terminal_condition();
     assemble_system_matrices();
+
+    implicit_Euler_solve();
+
+    // Some test-values
+    Vector<double> value_at_strike(1);
+    VectorTools::point_value(dof_handler, solution, Point<dim>(params.K), value_at_strike);
+    std::cout << "\nOption value at K = " << params.K << ": " << value_at_strike[0] << std::endl;
 }
 
 /* ------------------------------------------------------------------------------
@@ -276,8 +357,8 @@ int main()
         Black_Scholes_parameters parameters;
         const unsigned int degree = 1;
 
-        BlackScholes<1> solver(parameters, degree);
-        solver.run();
+        BlackScholes<1> Black_Scholes_solver(parameters, degree);
+        Black_Scholes_solver.run();
     }
     catch (std::exception &exc)
     {
