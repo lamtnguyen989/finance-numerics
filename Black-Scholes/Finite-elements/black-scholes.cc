@@ -47,6 +47,7 @@ struct Black_Scholes_parameters
     Conditions of the problem (Vanilla European call options here)
 --------------------------------------------------------------------------------- */
 
+// Terminal condition: u(S, T) = max(S-K, 0)
 template <int dim>
 class TerminalCondition : public Function<dim> 
 {
@@ -65,19 +66,45 @@ class TerminalCondition : public Function<dim>
     private:
         Black_Scholes_parameters params;
 };
-/*
+
+// Max Price Condition (discount): u(S_max, t) = S_max - Ke^{-r(T-t)}
 template <int dim>
 class MaxPriceCondition : public Function<dim>
 {
+    public:
+        MaxPriceCondition(Black_Scholes_parameters &parameters)
+            : Function<dim> ()
+            , params(parameters)
+        {}
 
+        virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
+        {
+            double S_max = p[0];    // TODO: Test this
+            return 0.0;             // TODO: Finish this
+        }
+    private:
+        Black_Scholes_parameters params;
 };
 
+
+// Min Price condition: u(S_min, t) = 0
 template <int dim>
 class MinPriceCondition : public Function<dim>
 {
+    public: 
+        MinPriceCondition(Black_Scholes_parameters &parameters)
+            : Function<dim> ()
+            , params(parameters)
+        {}
 
+        virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
+        {
+            return 0.0;
+        }
+
+    private:
+        Black_Scholes_parameters params;
 };
-*/
 
 /* ------------------------------------------------------------------------------
     Solver object
@@ -191,18 +218,38 @@ void BlackScholes<dim>::assemble_system_matrices()
         cell_stiffness_matrix = 0;
         for (unsigned int q_index = 0; q_index < quadrature.size(); q_index++)
         {
+            double S = fe_values.quadrature_point(q_index)[0];
+
             for (unsigned int i = 0; i< fe.dofs_per_cell; i++)
             {
                 for (unsigned int j = 0; j < fe.dofs_per_cell; j++)
                 {
+                    /*  Mass matrix terms calculation */
                     cell_mass_matrix(i, j) += fe_values.shape_value(i,q_index) * fe_values.shape_value(j,q_index)
                                             * fe_values.JxW(q_index);
                     
-                    // TODO: Stiffness matrix assembly
+                    /* Stiffness matrix */
+                    // Diffusion term
+                    cell_stiffness_matrix(i, j) += (std::pow(S * params.sigma, 2) )/ 2.0
+                                                * fe_values.shape_grad(i,q_index)[0] * fe_values.shape_grad(j,q_index)[0];
+                    // Convection term
+                    cell_stiffness_matrix(i, j) += params.r*S * fe_values.shape_value(i, q_index) * fe_values.shape_grad(j,q_index)[0];
+
+                    // Reaction term
+                    cell_stiffness_matrix(i, j) -= params.r * fe_values.shape_value(i, q_index) * fe_values.shape_value(j, q_index);
+                    
+                    // Differential weights terms multiplication to finish the integrand
+                    cell_stiffness_matrix(i, j) *= fe_values.JxW(q_index);
                 }
             }
         }
+
+        // Distribute the calculated result to the global system matrices
+        cell->get_dof_indices(local_dof_indices);
+        constraints.distribute_local_to_global(cell_mass_matrix, local_dof_indices, mass_matrix);
+        constraints.distribute_local_to_global(cell_stiffness_matrix, local_dof_indices, stiffness_matrix);
     }
+    std::cout << "System matrices assembly finished." << std::endl;
 }
 
 template <int dim>
