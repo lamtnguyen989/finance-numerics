@@ -105,7 +105,7 @@ class MinPriceCondition : public Function<dim>
 
         virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
         {
-            return 0.0;
+            return 0.0 * p[0];  // Shutting up the compiler (hopefully this wouldn't add run time due to -O3)
         }
 
     private:
@@ -126,8 +126,7 @@ class BlackScholes
         void applying_terminal_condition();
         void assemble_mass_and_stiffness_matrices();
         void apply_boundary_conditions(double t);
-        void implicit_Euler_solve();
-        void Crank_Nicholson_solve();
+        void SDIRK_2_solve();
         void output_timestep(double t);
         void output_time_evolution();
 
@@ -279,109 +278,76 @@ void BlackScholes<dim>::apply_boundary_conditions(double t)
     VectorTools::interpolate_boundary_values(dof_handler, boundary_id_max, MaxPriceCondition<dim>(params, t), boundary_values);
 
     // Applying BCs to system_matrix and RHS
-    MatrixTools::apply_boundary_values(boundary_values, system_matrix, solution,rhs);
+    MatrixTools::apply_boundary_values(boundary_values, system_matrix, solution, rhs);
 }
 
+
 template <int dim>
-void BlackScholes<dim>::implicit_Euler_solve()
+void BlackScholes<dim>::SDIRK_2_solve()
 {
     /*
         Coefficient DiffEq system (for mass matrix M and stiffness matrix K): M(du/d_tau) = Ku
-        Implicit Euler temporal discretization: du/d_tau = (u_{n+1} - u_n) / d_tau
-        Arising system: (M - d_tau*K) u_{n+1} = Mu_n
-    */
-
-    // Time-step size (note that we explicitly control this)
-    double d_tau = (params.T - params.t_0) / (params.n_time_steps);
-
-    // Initialize (direct) solver
-    SparseDirectUMFPACK solver;
-
-    // Compute mass and stiffness before going to time-stepping as they are not time-dependent
-    assemble_mass_and_stiffness_matrices();
-    
-    // Time-stepping loop
-    for (unsigned int n = 0; n < params.n_time_steps; n++)
-    {
-        double current_time = params.T - n*d_tau;
-        double next_time = current_time - d_tau;
-
-        // Initialize and factorize (and invert) system matrix at time-step
-        system_matrix.copy_from(mass_matrix);
-        system_matrix.add(-d_tau, stiffness_matrix);
-        solver.initialize(system_matrix);
-
-        // RHS
-        mass_matrix.vmult(rhs, old_solution);
-
-        // Solving the equation
-        solver.vmult(solution, rhs);
-        apply_boundary_conditions(next_time);
-
-        // Output last timestep
-        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
-
-        // Storing computed solution
-        all_solutions.push_back(solution);
-        old_solution = solution;
-    }
-}
-
-template <int dim>
-void BlackScholes<dim>::Crank_Nicholson_solve()
-{
-    /*
-        Crank-Nicholson scheme for M[du/d_tau] = Ku (mass M, stiffness K):
-        [M - 0.5*d_tau*K] u_{n+1} = [M + 0.5*d_tau*K] u_n
+        This will be solved with 2-stage SDIRK method which uses the constant \gamma = 1-1/sqrt(2)
         
-        ** Note that we would need both a left and right matrices
+        Based on Butcher's table (with the fact du/d\tau = du/dt), the system matrix is: A = M - \gamma*d_tau*K
+        The stages B_1 and B_2 are calculated from:
+            A * B_1 = M * u_{n}
+            A * B_2 = K * (u_{n} + \gamma*d_\tau*B_1)
+        Update:
+            u_{n+1} = u_{n} + d_tau * [(1-\gamma)*B_1 + \gamma * B_2]
     */
 
-    // Time-step size (note that we explicitly control this)
+    // Time-step size
     double d_tau = (params.T - params.t_0) / (params.n_time_steps);
+
+    // L-stabe constant for SDIRK-2
+    double gamma = 1-(1/std::sqrt(2));
+
+    // Assemble mass and stiffness matrix
+    assemble_mass_and_stiffness_matrices();
 
     // Initialize (direct) solver
     SparseDirectUMFPACK solver;
 
-    // Initialize both the left and right matrices for the scheme
-    assemble_mass_and_stiffness_matrices();
-    SparseMatrix<double> left_matrix;
-    SparseMatrix<double> right_matrix;
-    
-    // Time-stepping loop
+    // Assemble and (pre)invert system matrix
+    system_matrix.copy_from(mass_matrix);
+    system_matrix.add(-d_tau*gamma, stiffness_matrix);
+    solver.initialize(system_matrix);
+
+    // Initialize stages solution vectors
+    Vector<double> stage_1(solution.size());
+    Vector<double> stage_2(solution.size());
+
     for (unsigned int n = 0; n < params.n_time_steps; n++)
     {
-        // Extracting time
+        // Extracting times
         double current_time = params.T - n*d_tau;
         double next_time = current_time - d_tau;
 
-        // Assemble the left and right matrices
-        left_matrix.reinit(sparsity_pattern);
-        left_matrix.copy_from(mass_matrix);
-        left_matrix.add(-0.5*d_tau, stiffness_matrix);
+        // Stage 1
+        stiffness_matrix.vmult(rhs, old_solution);
+        solver.vmult(stage_1, rhs);
 
-        right_matrix.reinit(sparsity_pattern);
-        right_matrix.copy_from(mass_matrix);
-        right_matrix.add(0.5*d_tau, stiffness_matrix);
+        // Stage 2
+        stiffness_matrix.vmult(rhs, old_solution);
+        rhs.add(gamma*d_tau, stage_1);
+        solver.vmult(stage_2, rhs);
 
-        // RHS
-        right_matrix.vmult(rhs, old_solution);
+        // Update solution
+        solution = old_solution;
+        solution.add((1-gamma)*d_tau, stage_1);
+        solution.add(gamma*d_tau, stage_2);
 
-        // Solve
-        solver.initialize(left_matrix);
-        solver.vmult(solution, rhs);
-
-        // Apply boundary after solving
+        // Apply boundary conditions
         apply_boundary_conditions(next_time);
+
+        // Storing solution
+        all_solutions.push_back(solution);
+        old_solution = solution;
 
         // Output last timestep
         if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
-
-        all_solutions.push_back(solution);
-        old_solution = solution;
     }
-
-    std::cout << "Finished Crank-Nicholson time-stepping" << std::endl;
 }
 
 template <int dim>
@@ -457,8 +423,7 @@ void BlackScholes<dim>::run()
     make_and_setup_system();
     applying_terminal_condition();
 
-    //implicit_Euler_solve();
-    Crank_Nicholson_solve();
+    SDIRK_2_solve();
     output_time_evolution();
 
     // Some test-values
