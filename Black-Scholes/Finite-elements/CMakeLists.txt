@@ -13,7 +13,7 @@ SET(TARGET_SRC
 # Minimum resources and versions
 CMAKE_MINIMUM_REQUIRED(VERSION 4.0.1)
 
-FIND_PACKAGE(deal.II 9.6.0
+FIND_PACKAGE(deal.II 9.3.0
   HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
 )
 
