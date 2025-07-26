@@ -16,6 +16,6 @@ rm CMakeCache.txt
 rm Makefile
 
 # Main compilation and run command
-cmake .
+cmake ..
 make -j$CORES $VERBOSE_FLAG
 ./black-scholes
