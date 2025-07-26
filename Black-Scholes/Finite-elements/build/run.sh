@@ -9,6 +9,12 @@ else
     VERBOSE_FLAG="VERBOSE=0"
 fi
 
+# Clean 
+rm black-scholes
+rm -rf CMakeFiles/
+rm CMakeCache.txt
+rm Makefile
+
 # Main compilation and run command
 cmake ..
 make -j$CORES $VERBOSE_FLAG
