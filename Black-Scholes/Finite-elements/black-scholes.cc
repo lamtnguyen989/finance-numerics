@@ -40,7 +40,7 @@ struct Black_Scholes_parameters
     double S_max = 150;     // Maximum asset price
     double K = 100;         // Strike price
     double t_0 = 0;         // Initial time
-    double T = 0.25;         // Expiry time
+    double T = 0.25;        // Expiry time
 
     unsigned int n_price_cells = 100;
     unsigned int n_time_steps = 300;
@@ -78,18 +78,18 @@ class MaxPriceCondition : public Function<dim>
         MaxPriceCondition(Black_Scholes_parameters &parameters, double t)
             : Function<dim> ()
             , params(parameters)
-        {
-            tau = params.T - t;
-        }
+            , t(t)
+        {}
 
         virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
         {
             double S_max = p[0];
-            return S_max - params.K * std::exp(-params.r * tau);
+            return S_max - params.K * std::exp(-params.r * (params.T - t));
         }
+        
     private:
         Black_Scholes_parameters params;
-        double tau;
+        double t;
 };
 
 
@@ -124,14 +124,14 @@ class BlackScholes
     private:
         void make_and_setup_system();
         void applying_terminal_condition();
-        void assemble_system_matrices();
+        void assemble_mass_and_stiffness_matrices();
         void apply_boundary_conditions(double t);
         void implicit_Euler_solve();
         void output_timestep(double t);
         void output_time_evolution();
 
         Black_Scholes_parameters params;
-        const unsigned int degree;
+        unsigned int degree;
 
         FE_Q<dim>                   fe;
         Triangulation<dim>          triangulation;
@@ -206,7 +206,7 @@ void BlackScholes<dim>::applying_terminal_condition()
 }
 
 template <int dim>
-void BlackScholes<dim>::assemble_system_matrices()
+void BlackScholes<dim>::assemble_mass_and_stiffness_matrices()
 {
     // Zero out the matrices
     mass_matrix = 0;
@@ -303,7 +303,7 @@ void BlackScholes<dim>::implicit_Euler_solve()
         double next_time = current_time - d_tau;
 
         // Initialize and factorize system matrix at time-step
-        assemble_system_matrices();
+        assemble_mass_and_stiffness_matrices();
         system_matrix.copy_from(mass_matrix);
         system_matrix.add(-d_tau, stiffness_matrix);
         solver.initialize(system_matrix);
@@ -316,8 +316,8 @@ void BlackScholes<dim>::implicit_Euler_solve()
         solver.vmult(solution, rhs);
         apply_boundary_conditions(next_time);
 
-        // Output timestep
-        if (std::abs(next_time) < 1e-8) {output_timestep(next_time);}
+        // Output last timestep
+        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(next_time);}
 
         // Storing computed solution
         all_solutions.push_back(solution);
@@ -339,6 +339,58 @@ void BlackScholes<dim>::output_timestep(double t)
     data_out.write_vtu(output);
 }
 
+template <int dim>
+void BlackScholes<dim>::output_time_evolution() 
+{
+    // Create a 2D time-evolution grid in (S,t)
+    Triangulation<dim+1> spacetime_triangulation;
+    std::vector<unsigned int> repetitions = {params.n_price_cells, params.n_time_steps};
+    Point<dim+1> bottom_left(params.S_min, params.t_0);
+    Point<dim+1> top_right(params.S_max, params.T);
+    GridGenerator::subdivided_hyper_rectangle(spacetime_triangulation, repetitions, bottom_left, top_right);
+
+    // Distribute DoFs on the evolution grid
+    FE_Q<dim+1> spacetime_fe(degree);
+    DoFHandler<dim+1> spacetime_dof_handler(spacetime_triangulation);
+    spacetime_dof_handler.distribute_dofs(spacetime_fe);
+
+    // Initialize solution vector
+    Vector<double> spacetime_solution(spacetime_dof_handler.n_dofs());
+    double dt = (params.T - params.t_0) / params.n_time_steps;
+
+    // Interpolating the solution on the grid
+    std::vector<Point<dim+1>> support_points(spacetime_dof_handler.n_dofs());
+    DoFTools::map_dofs_to_support_points(MappingQ1<dim+1>(), spacetime_dof_handler, support_points);
+    for (unsigned int i = 0; i < spacetime_dof_handler.n_dofs(); ++i)
+    {
+        // Extracting (S,t) coordinates of the support point
+        const Point<dim+1>& point = support_points[i];
+        double S = point[0];
+        double t = point[1]; 
+        
+        // Find time-based index within stored-solutions to interpolate
+        int time_index = std::round((t - params.t_0) / dt);
+        time_index = std::max(0, std::min(time_index, static_cast<int>(all_solutions.size() - 1)));
+        
+        // Interpolate
+        Vector<double> interpolated_value(1);
+        VectorTools::point_value(dof_handler, all_solutions[time_index], Point<dim>(S), interpolated_value);
+        spacetime_solution(i) = interpolated_value(0);
+    }
+
+
+    // Output the spacetime solution
+    DataOut<dim+1> data_out;
+    data_out.attach_dof_handler(spacetime_dof_handler);
+    data_out.add_data_vector(spacetime_solution, "V");
+    data_out.build_patches();
+
+    std::string file = "Black-Scholes-evolution.vtu";
+    std::ofstream output(file);
+    data_out.write_vtu(output);
+    
+    std::cout << "Time evolution solution written to: " << file << std::endl;
+}
 
 template <int dim>
 void BlackScholes<dim>::run()
@@ -347,6 +399,7 @@ void BlackScholes<dim>::run()
     applying_terminal_condition();
 
     implicit_Euler_solve();
+    output_time_evolution();
 
     // Some test-values
     Vector<double> value_at_strike(1);
