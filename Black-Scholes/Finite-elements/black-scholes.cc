@@ -296,6 +296,9 @@ void BlackScholes<dim>::implicit_Euler_solve()
 
     // Initialize (direct) solver
     SparseDirectUMFPACK solver;
+
+    // Compute mass and stiffness before going to time-stepping as they are not time-dependent
+    assemble_mass_and_stiffness_matrices();
     
     // Time-stepping loop
     for (unsigned int n = 0; n < params.n_time_steps; n++)
@@ -303,12 +306,10 @@ void BlackScholes<dim>::implicit_Euler_solve()
         double current_time = params.T - n*d_tau;
         double next_time = current_time - d_tau;
 
-        // Initialize and factorize system matrix at time-step
-        assemble_mass_and_stiffness_matrices();
+        // Initialize and factorize (and invert) system matrix at time-step
         system_matrix.copy_from(mass_matrix);
         system_matrix.add(-d_tau, stiffness_matrix);
         solver.initialize(system_matrix);
-
 
         // RHS
         mass_matrix.vmult(rhs, old_solution);
@@ -343,10 +344,9 @@ void BlackScholes<dim>::Crank_Nicholson_solve()
     SparseDirectUMFPACK solver;
 
     // Initialize both the left and right matrices for the scheme
+    assemble_mass_and_stiffness_matrices();
     SparseMatrix<double> left_matrix;
     SparseMatrix<double> right_matrix;
-    left_matrix.reinit(sparsity_pattern);
-    right_matrix.reinit(sparsity_pattern);
     
     // Time-stepping loop
     for (unsigned int n = 0; n < params.n_time_steps; n++)
@@ -356,9 +356,11 @@ void BlackScholes<dim>::Crank_Nicholson_solve()
         double next_time = current_time - d_tau;
 
         // Assemble the left and right matrices
-        assemble_mass_and_stiffness_matrices();
+        left_matrix.reinit(sparsity_pattern);
         left_matrix.copy_from(mass_matrix);
         left_matrix.add(-0.5*d_tau, stiffness_matrix);
+
+        right_matrix.reinit(sparsity_pattern);
         right_matrix.copy_from(mass_matrix);
         right_matrix.add(0.5*d_tau, stiffness_matrix);
 
@@ -374,6 +376,9 @@ void BlackScholes<dim>::Crank_Nicholson_solve()
 
         // Output last timestep
         if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
+
+        all_solutions.push_back(solution);
+        old_solution = solution;
     }
 
     std::cout << "Finished Crank-Nicholson time-stepping" << std::endl;
