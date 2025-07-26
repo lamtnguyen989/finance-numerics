@@ -17,9 +17,6 @@ FIND_PACKAGE(deal.II 9.6.0
   HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
 )
 
-# Optimization
-SET(CMAKE_CXX_FLAGS_RELEASE "-O3")
-
 # Error package handling stuff
 IF(NOT ${deal.II_FOUND})
   MESSAGE(FATAL_ERROR "\n"
@@ -32,3 +29,6 @@ ENDIF()
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 PROJECT(${TARGET})
 DEAL_II_INVOKE_AUTOPILOT()
+
+# Optimization
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")

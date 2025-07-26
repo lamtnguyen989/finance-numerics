@@ -127,6 +127,7 @@ class BlackScholes
         void assemble_mass_and_stiffness_matrices();
         void apply_boundary_conditions(double t);
         void implicit_Euler_solve();
+        void Crank_Nicholson_solve();
         void output_timestep(double t);
         void output_time_evolution();
 
@@ -317,12 +318,65 @@ void BlackScholes<dim>::implicit_Euler_solve()
         apply_boundary_conditions(next_time);
 
         // Output last timestep
-        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(next_time);}
+        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
 
         // Storing computed solution
         all_solutions.push_back(solution);
         old_solution = solution;
     }
+}
+
+template <int dim>
+void BlackScholes<dim>::Crank_Nicholson_solve()
+{
+    /*
+        Crank-Nicholson scheme for M[du/d_tau] = Ku (mass M, stiffness K):
+        [M - 0.5*d_tau*K] u_{n+1} = [M + 0.5*d_tau*K] u_n
+        
+        ** Note that we would need both a left and right matrices
+    */
+
+    // Time-step size (note that we explicitly control this)
+    double d_tau = (params.T - params.t_0) / (params.n_time_steps);
+
+    // Initialize (direct) solver
+    SparseDirectUMFPACK solver;
+
+    // Initialize both the left and right matrices for the scheme
+    SparseMatrix<double> left_matrix;
+    SparseMatrix<double> right_matrix;
+    left_matrix.reinit(sparsity_pattern);
+    right_matrix.reinit(sparsity_pattern);
+    
+    // Time-stepping loop
+    for (unsigned int n = 0; n < params.n_time_steps; n++)
+    {
+        // Extracting time
+        double current_time = params.T - n*d_tau;
+        double next_time = current_time - d_tau;
+
+        // Assemble the left and right matrices
+        assemble_mass_and_stiffness_matrices();
+        left_matrix.copy_from(mass_matrix);
+        left_matrix.add(-0.5*d_tau, stiffness_matrix);
+        right_matrix.copy_from(mass_matrix);
+        right_matrix.add(0.5*d_tau, stiffness_matrix);
+
+        // RHS
+        right_matrix.vmult(rhs, old_solution);
+
+        // Solve
+        solver.initialize(left_matrix);
+        solver.vmult(solution, rhs);
+
+        // Apply boundary after solving
+        apply_boundary_conditions(next_time);
+
+        // Output last timestep
+        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
+    }
+
+    std::cout << "Finished Crank-Nicholson time-stepping" << std::endl;
 }
 
 template <int dim>
@@ -398,13 +452,20 @@ void BlackScholes<dim>::run()
     make_and_setup_system();
     applying_terminal_condition();
 
-    implicit_Euler_solve();
+    //implicit_Euler_solve();
+    Crank_Nicholson_solve();
     output_time_evolution();
 
     // Some test-values
-    Vector<double> value_at_strike(1);
-    VectorTools::point_value(dof_handler, solution, Point<dim>(params.K), value_at_strike);
-    std::cout << "\nOption value at K = " << params.K << ": " << value_at_strike[0] << std::endl;
+    std::cout << std::endl;
+    std::vector<double> prices = {75, 100, 125, 150};
+    Vector<double> values(1);
+    for (unsigned int i = 0; i < prices.size(); i++)
+    {
+        VectorTools::point_value(dof_handler, solution, Point<dim>(prices[i]), values);
+        std::cout << "Option value at " << prices[i] << ": " << values[0] << std::endl;
+    }
+    
 }
 
 /* ------------------------------------------------------------------------------
