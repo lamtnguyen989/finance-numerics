@@ -1,11 +1,10 @@
 from mpmath import mp, polyroots
-import numpy as np
 
 
 # Computing the parameter as the root of p(x) = 1 - 9x + 18x^2 - 6x^3
 coeffs = [-6, 18, -9, 1]
 
-for decimals in range(15, 31):
+for decimals in range(1, 31):
     # Setting the decimal precision for the irrational parameter
     mp.dps = decimals
 
@@ -15,6 +14,20 @@ for decimals in range(15, 31):
 
 # Console output: 
 """
+1 decimal places: [mpf('0.1582'), mpf('0.4375'), mpf('2.406')]
+2 decimal places: [mpf('0.15894'), mpf('0.43604'), mpf('2.4063')]
+3 decimal places: [mpf('0.158997'), mpf('0.435852'), mpf('2.40527')]
+4 decimal places: [mpf('0.1589832'), mpf('0.4358673'), mpf('2.405151')]
+5 decimal places: [mpf('0.15898395'), mpf('0.43586636'), mpf('2.4051514')]
+6 decimal places: [mpf('0.158983886'), mpf('0.435866535'), mpf('2.40514946')]
+7 decimal places: [mpf('0.1589838993'), mpf('0.4358665198'), mpf('2.405149579')]
+8 decimal places: [mpf('0.15898389998'), mpf('0.43586652167'), mpf('2.405149579')]
+9 decimal places: [mpf('0.158983899979'), mpf('0.435866521497'), mpf('2.40514957858')]
+10 decimal places: [mpf('0.158983899988'), mpf('0.4358665215077'), mpf('2.405149578495')]
+11 decimal places: [mpf('0.1589838999887'), mpf('0.43586652150861'), mpf('2.4051495785025')]
+12 decimal places: [mpf('0.158983899988669'), mpf('0.435866521508444'), mpf('2.40514957850291')]
+13 decimal places: [mpf('0.1589838999886766'), mpf('0.4358665215084585'), mpf('2.405149578502858')]
+14 decimal places: [mpf('0.15898389998867657'), mpf('0.43586652150845895'), mpf('2.4051495785028649')]
 15 decimal places: [mpf('0.15898389998867654'), mpf('0.435866521508459'), mpf('2.4051495785028645')]
 16 decimal places: [mpf('0.1589838999886765483'), mpf('0.4358665215084589969'), mpf('2.405149578502864427')]
 17 decimal places: [mpf('0.1589838999886765468'), mpf('0.43586652150845899955'), mpf('2.4051495785028644547')]
