@@ -43,7 +43,7 @@ struct Black_Scholes_parameters
     double T = 0.25;        // Expiry time
 
     unsigned int n_price_cells = 100;
-    unsigned int n_time_steps = 300;
+    unsigned int n_time_steps = 50;
 };
 
 /* ------------------------------------------------------------------------------
@@ -127,6 +127,7 @@ class BlackScholes
         void assemble_mass_and_stiffness_matrices();
         void apply_boundary_conditions(double t);
         void SDIRK_2_solve();
+        void SDIRK_3_solve();
         void output_timestep(double t);
         void output_time_evolution();
 
@@ -281,7 +282,6 @@ void BlackScholes<dim>::apply_boundary_conditions(double t)
     MatrixTools::apply_boundary_values(boundary_values, system_matrix, solution, rhs);
 }
 
-
 template <int dim>
 void BlackScholes<dim>::SDIRK_2_solve()
 {
@@ -301,7 +301,7 @@ void BlackScholes<dim>::SDIRK_2_solve()
     double d_tau = (params.T - params.t_0) / (params.n_time_steps);
 
     // L-stabe constant for SDIRK-2
-    double gamma = 1-(1/std::sqrt(2));
+    double gamma = 1.0 - (std::sqrt(2) / 2.0);
 
     // Assemble mass and stiffness matrix
     assemble_mass_and_stiffness_matrices();
@@ -326,11 +326,13 @@ void BlackScholes<dim>::SDIRK_2_solve()
 
         // Stage 1
         stiffness_matrix.vmult(rhs, old_solution);
+        apply_boundary_conditions(next_time);
         solver.vmult(stage_1, rhs);
 
         // Stage 2
         stiffness_matrix.vmult(rhs, old_solution);
         rhs.add(gamma*d_tau, stage_1);
+        apply_boundary_conditions(next_time);
         solver.vmult(stage_2, rhs);
 
         // Update solution
@@ -338,7 +340,6 @@ void BlackScholes<dim>::SDIRK_2_solve()
         solution.add((1-gamma)*d_tau, stage_1);
         solution.add(gamma*d_tau, stage_2);
 
-        // Apply boundary conditions
         apply_boundary_conditions(next_time);
 
         // Storing solution
@@ -349,6 +350,82 @@ void BlackScholes<dim>::SDIRK_2_solve()
         if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
     }
 }
+
+template <int dim>
+void BlackScholes<dim>::SDIRK_3_solve()
+{
+    // Time-step size
+    double d_tau = (params.T - params.t_0) / (params.n_time_steps);
+
+    // L-stable constant for SDIRK-3 (uses the 14 decimals places accuraccy output from 'sdirk-3-param.py')
+    double gamma = 0.43586652150845895;
+
+    // SDIRK-3 Butcher table entries
+    double a21 = (1.0-gamma) / 2.0;
+    double b_1 = -(6.0*std::pow(gamma,2) - 16.0*gamma - 1.0) / 4.0; // Note that a31 coincide with the 1st update coefficient
+    double b_2 = (6.0*std::pow(gamma,2) - 20.0*gamma + 5.0) / 4.0;  // Same thing, a32 coincide with 2nd update coefficient
+    double c_2 = (1 + gamma) / 2.0;
+
+    // Initialize direct solver
+    SparseDirectUMFPACK solver;
+
+    // Assemble (non time-dependent) mass and stiffness matrices
+    assemble_mass_and_stiffness_matrices();
+    system_matrix.copy_from(mass_matrix);
+    system_matrix.add(-d_tau*gamma, stiffness_matrix);
+    solver.initialize(system_matrix);
+
+
+    // Initialize stages solution
+    std::vector<Vector<double>> stages(3);
+    for (Vector<double> stage : stages) {stage.reinit(solution.size());}
+ 
+    // Time-stepping loop
+    for (unsigned int n = 0; n < params.n_time_steps; n++)
+    {
+        // Extracting times
+        double current_time = params.T - n*d_tau;
+        double next_time = current_time - d_tau;
+
+        // Stage 1
+        stiffness_matrix.vmult(rhs, old_solution);
+        apply_boundary_conditions(next_time);
+        solver.vmult(stages[0], rhs);
+
+        // Stage 2
+        stiffness_matrix.vmult(rhs, old_solution);
+        Vector<double> temp(stages[0]);
+        stiffness_matrix.vmult(temp, stages[0]);
+        rhs.add(a21*d_tau, temp);
+        apply_boundary_conditions(next_time);
+        solver.vmult(stages[1], rhs);
+
+        // Stage 3
+        stiffness_matrix.vmult(rhs, old_solution);
+        temp = (stages[0]*=b_1);
+        temp.add(b_2, stages[1]);
+        Vector<double> temp2(temp*=d_tau);
+        stiffness_matrix.vmult(rhs, temp2);
+        apply_boundary_conditions(next_time);
+        solver.vmult(stages[2], rhs);
+
+        // Update solution
+        //solution = old_solution;
+        solution.add(d_tau*b_1, stages[0]);
+        solution.add(d_tau*b_2, stages[1]);
+        solution.add(d_tau*gamma, stages[2]);
+
+        // Storing solution
+        all_solutions.push_back(solution);
+        old_solution = solution;
+
+        apply_boundary_conditions(next_time);
+
+        // Output last timestep
+        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
+    }
+}
+
 
 template <int dim>
 void BlackScholes<dim>::output_timestep(double t)
@@ -424,6 +501,7 @@ void BlackScholes<dim>::run()
     applying_terminal_condition();
 
     SDIRK_2_solve();
+    //SDIRK_3_solve();
     output_time_evolution();
 
     // Some test-values
