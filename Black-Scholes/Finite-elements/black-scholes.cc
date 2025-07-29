@@ -20,6 +20,8 @@
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/data_out.h>
 
+#include <deal.II/numerics/error_estimator.h>
+
 
 #include <iostream>
 #include <fstream>
@@ -119,10 +121,10 @@ template <int dim>
 class BlackScholes
 {
     public:
-        BlackScholes(Black_Scholes_parameters &parameters, const unsigned int deg);
+        BlackScholes(Black_Scholes_parameters &parameters, const unsigned int deg, const unsigned int refinement_cycles);
         void run();
     private:
-        void make_and_setup_system();
+        void setup_system();
         void applying_terminal_condition();
         void assemble_mass_and_stiffness_matrices();
         void apply_boundary_conditions(double t);
@@ -134,6 +136,7 @@ class BlackScholes
 
         Black_Scholes_parameters params;
         unsigned int degree;
+        unsigned int n_refinement_cycles;
 
         FE_Q<dim>                   fe;
         Triangulation<dim>          triangulation;
@@ -153,18 +156,18 @@ class BlackScholes
 };
 
 template <int dim>
-BlackScholes<dim>::BlackScholes(Black_Scholes_parameters &parameters, const unsigned int deg)
+BlackScholes<dim>::BlackScholes(Black_Scholes_parameters &parameters, const unsigned int deg, const unsigned int refinement_cycles)
     : params(parameters)
     , degree(deg)
+    , n_refinement_cycles(refinement_cycles)
     , fe(deg)
     , dof_handler(triangulation)
 {}
 
 template <int dim>
-void BlackScholes<dim>::make_and_setup_system()
+void BlackScholes<dim>::setup_system()
 {
-    // Making the 1d spatial grid and distributes DoFs
-    GridGenerator::subdivided_hyper_cube(triangulation, params.n_price_cells, params.S_min, params.S_max);
+    // Distribute DoFs
     dof_handler.distribute_dofs(fe);
 
     // Make and copy Sparsity pattern (with initializing the constraints)
@@ -450,22 +453,38 @@ void BlackScholes<dim>::output_time_evolution()
 template <int dim>
 void BlackScholes<dim>::run()
 {
-    make_and_setup_system();
-    applying_terminal_condition();
-
-    SDIRK_2_solve();
-
-    // Some test-values
-    std::cout << std::endl;
-    std::vector<double> prices = {75, 100, 125, 150};
-    Vector<double> values(1);
-    for (unsigned int i = 0; i < prices.size(); i++)
+    for (unsigned int cycle = 0; cycle < n_refinement_cycles; cycle++)
     {
-        VectorTools::point_value(dof_handler, solution, Point<dim>(prices[i]), values);
-        std::cout << "Option value at " << prices[i] << ": " << values[0] << std::endl;
-    }
+        if (cycle == 0) // Making the 1d spatial grid on first cycle
+        {
+            GridGenerator::subdivided_hyper_cube(triangulation, params.n_price_cells, params.S_min, params.S_max);
+        }
+        else
+        {
+            Vector<float> estimated_error_per_cell(triangulation.n_active_cells());
+            KellyErrorEstimator<dim>::estimate(dof_handler, QGauss<dim - 1>(degree + 1), {}, solution,estimated_error_per_cell);
+            GridRefinement::refine_and_coarsen_fixed_number(triangulation, estimated_error_per_cell,
+                                                    0.1, 0.01); 
 
-    output_time_evolution();
+            triangulation.execute_coarsening_and_refinement();
+        }
+
+        setup_system();
+        applying_terminal_condition();
+
+        SDIRK_2_solve();
+
+        // Some test-values
+        std::vector<double> prices = {75, 100, 125, 150};
+        Vector<double> values(1);
+        for (unsigned int i = 0; i < prices.size(); i++)
+        {
+            VectorTools::point_value(dof_handler, solution, Point<dim>(prices[i]), values);
+            std::cout << "Option value at " << prices[i] << ": " << values[0] << std::endl;
+        }
+        if (cycle == 0) {output_time_evolution();}
+        std::cout << std::endl;
+    }
 }
 
 /* ------------------------------------------------------------------------------
@@ -477,8 +496,9 @@ int main()
     {
         Black_Scholes_parameters parameters;
         const unsigned int degree = 1;
+        const unsigned int refinement_cycles = 1;
 
-        BlackScholes<1> Black_Scholes_solver(parameters, degree);
+        BlackScholes<1> Black_Scholes_solver(parameters, degree, refinement_cycles);
         Black_Scholes_solver.run();
     }
     catch (std::exception &exc)
