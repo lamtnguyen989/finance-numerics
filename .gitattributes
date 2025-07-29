@@ -1,2 +1,4 @@
 *.cc linguist-language=C++
 *.sh linguist-language=Shell
+
+*.gnuplot linguist-vendored
