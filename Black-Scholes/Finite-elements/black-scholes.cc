@@ -43,7 +43,7 @@ struct Black_Scholes_parameters
     double T = 0.25;        // Expiry time
 
     unsigned int n_price_cells = 100;
-    unsigned int n_time_steps = 50;
+    unsigned int n_time_steps = 300;
 };
 
 /* ------------------------------------------------------------------------------
@@ -127,9 +127,10 @@ class BlackScholes
         void assemble_mass_and_stiffness_matrices();
         void apply_boundary_conditions(double t);
         void SDIRK_2_solve();
-        void SDIRK_3_solve();
         void output_timestep(double t);
         void output_time_evolution();
+
+        double compute_stabilization_parameter(double cell_size, double S);
 
         Black_Scholes_parameters params;
         unsigned int degree;
@@ -207,6 +208,18 @@ void BlackScholes<dim>::applying_terminal_condition()
 }
 
 template <int dim>
+double BlackScholes<dim>::compute_stabilization_parameter(double cell_size, double S)
+{
+    // Computing Peclet number
+    double Pe = (cell_size * params.r * S) / (std::pow(params.sigma*S, 2));
+
+    // Stabilization parameter that is "optimal" for Convection-Diffusion equation
+    // Note that we have Convection-Diffusion-Reaction in Black-Scholes that we have but for start, this will do
+
+    return (cell_size / (2 * params.r * S)) * (1.0/std::tanh(Pe) + (1.0/Pe));
+}
+
+template <int dim>
 void BlackScholes<dim>::assemble_mass_and_stiffness_matrices()
 {
     // Zero out the matrices
@@ -214,9 +227,9 @@ void BlackScholes<dim>::assemble_mass_and_stiffness_matrices()
     stiffness_matrix = 0;
 
     // Initializing quadrature rules and Finite Element values
-    QGauss<dim> quadrature(degree + 1);
+    QGauss<dim> quadrature(degree + 2);
     FEValues<dim> fe_values(fe, quadrature,
-                    update_values | update_gradients | update_quadrature_points | update_JxW_values);
+                    update_values | update_gradients | update_quadrature_points | update_JxW_values | update_hessians);
     
     // Looping through cells to assemble the matrices
     FullMatrix<double> cell_mass_matrix(fe.dofs_per_cell, fe.dofs_per_cell);
@@ -229,27 +242,34 @@ void BlackScholes<dim>::assemble_mass_and_stiffness_matrices()
         cell_mass_matrix = 0;
         cell_stiffness_matrix = 0;
 
+        double cell_size = cell->diameter();
+
         for (unsigned int q_index = 0; q_index < quadrature.size(); q_index++)
         {
             double S = fe_values.quadrature_point(q_index)[0];
+            double eta = compute_stabilization_parameter(cell_size, S);
 
             for (unsigned int i = 0; i< fe.dofs_per_cell; i++)
             {
                 for (unsigned int j = 0; j < fe.dofs_per_cell; j++)
                 {
                     /*  Mass matrix terms calculation */
-                    cell_mass_matrix(i, j) += fe_values.shape_value(i,q_index) * fe_values.shape_value(j,q_index)
-                                            * fe_values.JxW(q_index);
+                    cell_mass_matrix(i, j) += fe_values.shape_value(i,q_index) * fe_values.shape_value(j,q_index) * fe_values.JxW(q_index);
+                    cell_mass_matrix(i, j) += eta * params.r * S * fe_values.shape_grad(i, q_index)[0] * fe_values.shape_value(j,q_index) * fe_values.JxW(q_index);
                     
                     /* Stiffness matrix */
                     // Diffusion term
                     cell_stiffness_matrix(i, j) += (std::pow(S * params.sigma, 2) )/ 2.0
                                                 * fe_values.shape_grad(i,q_index)[0] * fe_values.shape_grad(j,q_index)[0];
+                    cell_stiffness_matrix(i, j) += eta*params.r*std::pow(S,3) * fe_values.shape_hessian(j,q_index)[0][0] * fe_values.shape_grad(i, q_index)[0];
+
                     // Convection term
                     cell_stiffness_matrix(i, j) += params.r*S * fe_values.shape_value(i, q_index) * fe_values.shape_grad(j,q_index)[0];
+                    cell_stiffness_matrix(i, j) += std::pow(params.r*S, 2) * eta * fe_values.shape_grad(j,q_index)[0];
 
                     // Reaction term
                     cell_stiffness_matrix(i, j) -= params.r * fe_values.shape_value(i, q_index) * fe_values.shape_value(j, q_index);
+                    cell_stiffness_matrix(i, j) -= std::pow(params.r,2) * eta * S * fe_values.shape_grad(i, q_index)[0];
                     
                     // Differential weights terms multiplication to finish the integrand
                     cell_stiffness_matrix(i, j) *= fe_values.JxW(q_index);
@@ -309,11 +329,6 @@ void BlackScholes<dim>::SDIRK_2_solve()
     // Initialize (direct) solver
     SparseDirectUMFPACK solver;
 
-    // Assemble and (pre)invert system matrix
-    system_matrix.copy_from(mass_matrix);
-    system_matrix.add(-d_tau*gamma, stiffness_matrix);
-    solver.initialize(system_matrix);
-
     // Initialize stages solution vectors
     Vector<double> stage_1(solution.size());
     Vector<double> stage_2(solution.size());
@@ -326,13 +341,19 @@ void BlackScholes<dim>::SDIRK_2_solve()
 
         // Stage 1
         stiffness_matrix.vmult(rhs, old_solution);
+        system_matrix.copy_from(mass_matrix);
+        system_matrix.add(-d_tau*gamma, stiffness_matrix);
+        solver.initialize(system_matrix);
         apply_boundary_conditions(next_time);
         solver.vmult(stage_1, rhs);
 
         // Stage 2
         stiffness_matrix.vmult(rhs, old_solution);
         rhs.add(gamma*d_tau, stage_1);
+        system_matrix.copy_from(mass_matrix);
+        system_matrix.add(-d_tau*gamma, stiffness_matrix);
         apply_boundary_conditions(next_time);
+        solver.initialize(system_matrix);
         solver.vmult(stage_2, rhs);
 
         // Update solution
@@ -349,83 +370,8 @@ void BlackScholes<dim>::SDIRK_2_solve()
         // Output last timestep
         if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
     }
+    std::cout << "Finished SDIRK-2 time-stepping" << std::endl;
 }
-
-template <int dim>
-void BlackScholes<dim>::SDIRK_3_solve()
-{
-    // Time-step size
-    double d_tau = (params.T - params.t_0) / (params.n_time_steps);
-
-    // L-stable constant for SDIRK-3 (uses the 14 decimals places accuraccy output from 'sdirk-3-param.py')
-    double gamma = 0.43586652150845895;
-
-    // SDIRK-3 Butcher table entries
-    double a21 = (1.0-gamma) / 2.0;
-    double b_1 = -(6.0*std::pow(gamma,2) - 16.0*gamma - 1.0) / 4.0; // Note that a31 coincide with the 1st update coefficient
-    double b_2 = (6.0*std::pow(gamma,2) - 20.0*gamma + 5.0) / 4.0;  // Same thing, a32 coincide with 2nd update coefficient
-    double c_2 = (1 + gamma) / 2.0;
-
-    // Initialize direct solver
-    SparseDirectUMFPACK solver;
-
-    // Assemble (non time-dependent) mass and stiffness matrices
-    assemble_mass_and_stiffness_matrices();
-    system_matrix.copy_from(mass_matrix);
-    system_matrix.add(-d_tau*gamma, stiffness_matrix);
-    solver.initialize(system_matrix);
-
-
-    // Initialize stages solution
-    std::vector<Vector<double>> stages(3);
-    for (Vector<double> stage : stages) {stage.reinit(solution.size());}
- 
-    // Time-stepping loop
-    for (unsigned int n = 0; n < params.n_time_steps; n++)
-    {
-        // Extracting times
-        double current_time = params.T - n*d_tau;
-        double next_time = current_time - d_tau;
-
-        // Stage 1
-        stiffness_matrix.vmult(rhs, old_solution);
-        apply_boundary_conditions(next_time);
-        solver.vmult(stages[0], rhs);
-
-        // Stage 2
-        stiffness_matrix.vmult(rhs, old_solution);
-        Vector<double> temp(stages[0]);
-        stiffness_matrix.vmult(temp, stages[0]);
-        rhs.add(a21*d_tau, temp);
-        apply_boundary_conditions(next_time);
-        solver.vmult(stages[1], rhs);
-
-        // Stage 3
-        stiffness_matrix.vmult(rhs, old_solution);
-        temp = (stages[0]*=b_1);
-        temp.add(b_2, stages[1]);
-        Vector<double> temp2(temp*=d_tau);
-        stiffness_matrix.vmult(rhs, temp2);
-        apply_boundary_conditions(next_time);
-        solver.vmult(stages[2], rhs);
-
-        // Update solution
-        //solution = old_solution;
-        solution.add(d_tau*b_1, stages[0]);
-        solution.add(d_tau*b_2, stages[1]);
-        solution.add(d_tau*gamma, stages[2]);
-
-        // Storing solution
-        all_solutions.push_back(solution);
-        old_solution = solution;
-
-        apply_boundary_conditions(next_time);
-
-        // Output last timestep
-        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
-    }
-}
-
 
 template <int dim>
 void BlackScholes<dim>::output_timestep(double t)
@@ -435,10 +381,13 @@ void BlackScholes<dim>::output_timestep(double t)
     data_out.add_data_vector(solution, "V");
     data_out.build_patches();
 
-    std::string status = "t=" + std::to_string(t) + ".vtu";
+    std::string status = "t=" + std::to_string(t);
 
-    std::ofstream output(status);
-    data_out.write_vtu(output);
+    std::ofstream output_vtu(status + ".vtu");
+    data_out.write_vtu(output_vtu);
+
+    std::ofstream output_plot(status + ".gnuplot");
+    data_out.write_gnuplot(output_plot);
 }
 
 template <int dim>
@@ -487,9 +436,13 @@ void BlackScholes<dim>::output_time_evolution()
     data_out.add_data_vector(spacetime_solution, "V");
     data_out.build_patches();
 
-    std::string file = "Black-Scholes-evolution.vtu";
-    std::ofstream output(file);
-    data_out.write_vtu(output);
+    std::string file = "Black-Scholes-evolution";
+    
+    std::ofstream output_vtu(file + ".vtu");
+    data_out.write_vtu(output_vtu);
+
+    std::ofstream output_plot(file + ".gnuplot");
+    data_out.write_gnuplot(output_plot);
     
     std::cout << "Time evolution solution written to: " << file << std::endl;
 }
@@ -501,8 +454,6 @@ void BlackScholes<dim>::run()
     applying_terminal_condition();
 
     SDIRK_2_solve();
-    //SDIRK_3_solve();
-    output_time_evolution();
 
     // Some test-values
     std::cout << std::endl;
@@ -513,7 +464,8 @@ void BlackScholes<dim>::run()
         VectorTools::point_value(dof_handler, solution, Point<dim>(prices[i]), values);
         std::cout << "Option value at " << prices[i] << ": " << values[0] << std::endl;
     }
-    
+
+    output_time_evolution();
 }
 
 /* ------------------------------------------------------------------------------
