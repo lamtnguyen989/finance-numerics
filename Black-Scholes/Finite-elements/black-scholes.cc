@@ -19,7 +19,6 @@
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/data_out.h>
-
 #include <deal.II/numerics/error_estimator.h>
 
 
@@ -137,6 +136,7 @@ class BlackScholes
         Black_Scholes_parameters params;
         unsigned int degree;
         unsigned int n_refinement_cycles;
+        unsigned int cycle;
 
         FE_Q<dim>                   fe;
         Triangulation<dim>          triangulation;
@@ -160,6 +160,7 @@ BlackScholes<dim>::BlackScholes(Black_Scholes_parameters &parameters, const unsi
     : params(parameters)
     , degree(deg)
     , n_refinement_cycles(refinement_cycles)
+    , cycle(0)
     , fe(deg)
     , dof_handler(triangulation)
 {}
@@ -384,7 +385,7 @@ void BlackScholes<dim>::output_timestep(double t)
     data_out.add_data_vector(solution, "V");
     data_out.build_patches();
 
-    std::string status = "t=" + std::to_string(t);
+    std::string status = "t=" + std::to_string(t) + "_cycle_" + std::to_string(cycle+1);
 
     std::ofstream output_vtu(status + ".vtu");
     data_out.write_vtu(output_vtu);
@@ -398,7 +399,7 @@ void BlackScholes<dim>::output_time_evolution()
 {
     // Create a 2D time-evolution grid in (S,t)
     Triangulation<dim+1> spacetime_triangulation;
-    std::vector<unsigned int> repetitions = {params.n_price_cells, params.n_time_steps};
+    std::vector<unsigned int> repetitions = {triangulation.n_active_cells(), params.n_time_steps};
     Point<dim+1> bottom_left(params.S_min, params.t_0);
     Point<dim+1> top_right(params.S_max, params.T);
     GridGenerator::subdivided_hyper_rectangle(spacetime_triangulation, repetitions, bottom_left, top_right);
@@ -453,18 +454,17 @@ void BlackScholes<dim>::output_time_evolution()
 template <int dim>
 void BlackScholes<dim>::run()
 {
-    for (unsigned int cycle = 0; cycle < n_refinement_cycles; cycle++)
+    for (; cycle < n_refinement_cycles; cycle++)
     {
         if (cycle == 0) // Making the 1d spatial grid on first cycle
         {
             GridGenerator::subdivided_hyper_cube(triangulation, params.n_price_cells, params.S_min, params.S_max);
         }
-        else
+        else    // Refine for subsequent cycles
         {
             Vector<float> estimated_error_per_cell(triangulation.n_active_cells());
             KellyErrorEstimator<dim>::estimate(dof_handler, QGauss<dim - 1>(degree + 1), {}, solution,estimated_error_per_cell);
-            GridRefinement::refine_and_coarsen_fixed_number(triangulation, estimated_error_per_cell,
-                                                    0.1, 0.01); 
+            GridRefinement::refine_and_coarsen_fixed_number(triangulation, estimated_error_per_cell, 0.1, 0.01); 
 
             triangulation.execute_coarsening_and_refinement();
         }
@@ -496,7 +496,7 @@ int main()
     {
         Black_Scholes_parameters parameters;
         const unsigned int degree = 1;
-        const unsigned int refinement_cycles = 1;
+        const unsigned int refinement_cycles = 2;
 
         BlackScholes<1> Black_Scholes_solver(parameters, degree, refinement_cycles);
         Black_Scholes_solver.run();
