@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CORES=$(nproc)  # This is the number of threads the computer has, basically this will pararellize the compilation across all cores
+THREADS=$(nproc)  # This is the number of threads the computer has, basically this will pararellize the compilation across all cores
 
 # Determines whether or not you want verbose compiler output (flags, debug info, etc.)
 if [ "$1" = "1" ]; then
@@ -17,7 +17,7 @@ rm black-scholes
 
 # Main compilation and run command
 cmake .
-make -j$CORES $VERBOSE_FLAG
+make -j$THREADS $VERBOSE_FLAG
 ./black-scholes
 
 # Keep all of the outputs in a directory
@@ -41,4 +41,4 @@ for base in "${BASE[@]}"; do
 done
 
 
-echo "All outputs moved to $DIR/"
+echo "All outputs moved to $DIR/ folder"
