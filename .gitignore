@@ -5,4 +5,11 @@ Black-Scholes/Finite-elements/build/cmake_install.cmake
 Black-Scholes/Finite-elements/build/CMakeCache.txt
 Black-Scholes/Finite-elements/build/Makefile
 
-Black-Scholes/Finite-elements/dev
+Black-Scholes/Finite-elements/compile_commands.json
+Black-Scholes/Finite-elements/build-transformed/compile_commands.json
+Black-Scholes/Finite-elements/build-transformed/CMakeFiles/
+Black-Scholes/Finite-elements/build-transformed/cmake_install.cmake
+Black-Scholes/Finite-elements/build-transformed/CMakeCache.txt
+Black-Scholes/Finite-elements/build-transformed/Makefile
+
+Black-Scholes/Finite-elements/dev/
