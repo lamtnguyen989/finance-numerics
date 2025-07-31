@@ -1,6 +1,7 @@
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/function.h>
 #include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/fe_dgq.h>
 #include <deal.II/fe/mapping_q1.h>
 #include <deal.II/fe/fe_values.h>
 #include <deal.II/lac/vector.h>
@@ -203,7 +204,6 @@ void BlackScholes<dim>::applying_terminal_condition()
     TerminalCondition<dim> terminal_condition(params);
     VectorTools::interpolate(dof_handler, terminal_condition, solution);
 
-    // Storing the interpolated condition
     all_solutions.push_back(solution);
     old_solution = solution;
 
@@ -231,7 +231,7 @@ void BlackScholes<dim>::assemble_mass_and_stiffness_matrices()
     stiffness_matrix = 0;
 
     // Initializing quadrature rules and Finite Element values
-    QGauss<dim> quadrature(degree + 2);
+    QGauss<dim> quadrature(2*degree + 1);
     FEValues<dim> fe_values(fe, quadrature,
                     update_values | update_gradients | update_quadrature_points | update_JxW_values | update_hessians);
     
@@ -327,8 +327,10 @@ void BlackScholes<dim>::SDIRK_2_solve()
     // L-stabe constant for SDIRK-2
     double gamma = 1.0 - (std::sqrt(2) / 2.0);
 
-    // Assemble mass and stiffness matrix
+    // Set up the system matrix
     assemble_mass_and_stiffness_matrices();
+    system_matrix.copy_from(mass_matrix);
+    system_matrix.add(-d_tau*gamma, stiffness_matrix);
 
     // Initialize (direct) solver
     SparseDirectUMFPACK solver;
@@ -345,8 +347,6 @@ void BlackScholes<dim>::SDIRK_2_solve()
 
         // Stage 1
         stiffness_matrix.vmult(rhs, old_solution);
-        system_matrix.copy_from(mass_matrix);
-        system_matrix.add(-d_tau*gamma, stiffness_matrix);
         solver.initialize(system_matrix);
         apply_boundary_conditions(next_time);
         solver.vmult(stage_1, rhs);
@@ -354,8 +354,6 @@ void BlackScholes<dim>::SDIRK_2_solve()
         // Stage 2
         stiffness_matrix.vmult(rhs, old_solution);
         rhs.add(gamma*d_tau, stage_1);
-        system_matrix.copy_from(mass_matrix);
-        system_matrix.add(-d_tau*gamma, stiffness_matrix);
         apply_boundary_conditions(next_time);
         solver.initialize(system_matrix);
         solver.vmult(stage_2, rhs);
@@ -364,7 +362,6 @@ void BlackScholes<dim>::SDIRK_2_solve()
         solution = old_solution;
         solution.add((1-gamma)*d_tau, stage_1);
         solution.add(gamma*d_tau, stage_2);
-
         apply_boundary_conditions(next_time);
 
         // Storing solution
@@ -374,7 +371,7 @@ void BlackScholes<dim>::SDIRK_2_solve()
         // Output last timestep
         if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
     }
-    std::cout << "Finished SDIRK-2 time-stepping" << std::endl;
+    std::cout << "Finished solving with SDIRK-2 time-stepping" << std::endl;
 }
 
 template <int dim>
@@ -482,7 +479,7 @@ void BlackScholes<dim>::run()
             VectorTools::point_value(dof_handler, solution, Point<dim>(prices[i]), values);
             std::cout << "Option value at " << prices[i] << ": " << values[0] << std::endl;
         }
-        if (cycle == 0) {output_time_evolution();}
+        if (cycle == 0) {output_time_evolution();}  // Time-evolution outputs is broken for refinements
         std::cout << std::endl;
     }
 }
