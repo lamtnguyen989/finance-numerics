@@ -14,6 +14,7 @@ rm black-scholes
 #rm -rf CMakeFiles/
 #rm CMakeCache.txt
 #rm Makefile
+make clean
 
 # Main compilation and run command
 cmake .
@@ -41,4 +42,4 @@ for base in "${BASE[@]}"; do
 done
 
 
-echo "All outputs moved to $DIR/ folder"
+echo -e "All outputs moved to $DIR folder"
