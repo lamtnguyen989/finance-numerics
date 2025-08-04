@@ -21,6 +21,7 @@ cmake .
 make -j$THREADS $VERBOSE_FLAG
 ./black-scholes
 
+: '
 # Keep all of the outputs in a directory
 DIR="output"
 mkdir -p $DIR
@@ -43,3 +44,4 @@ done
 
 
 echo -e "All outputs moved to $DIR folder"
+'
