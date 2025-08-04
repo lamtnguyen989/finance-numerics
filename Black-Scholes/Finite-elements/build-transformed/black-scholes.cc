@@ -35,6 +35,7 @@ using namespace dealii;
 --------------------------------------------------------------------------------- */
 struct Black_Scholes_parameters
 {
+    // Standard parameters
     double r = 0.1;         // Risk-free rate
     double sigma = 0.01;    // Volatility
     double S_min = 50;      // Minimum asset price
@@ -43,58 +44,73 @@ struct Black_Scholes_parameters
     double t_0 = 0;         // Initial time
     double T = 0.25;        // Expiry time
 
+    // Transformation parameters
+    double x_min = std::log(S_min/K);
+    double x_max = std::log(S_max/K);
+    double tau_0 = 0;
+    double tau_final = std::pow(sigma,2)/2.0 * (T - t_0);
+    double alpha = 1.0/2.0 - r/std::pow(sigma,2);
+    double beta = std::pow(alpha, 2) + alpha*(2*r/std::pow(sigma,2) - 1) - 2*r/std::pow(sigma,2);
+
+    // Discretization parameters
     unsigned int n_price_cells = 100;
     unsigned int n_time_steps = 300;
 };
 
 /* ------------------------------------------------------------------------------
     Conditions of the problem (Vanilla European call options here)
+
+    ** Computed under transformation to Heat equation: x = ln(S/K) and \tau = (\sigma^2/2)(T-t)
+    ** This is used in conjuction with Ansatz V(S,t) = e^{\alpha*x + beta*\tau}u(x,\tau)
 --------------------------------------------------------------------------------- */
 
-// Terminal condition: u(S, T) = max(S-K, 0)
+// Original Terminal condition: V(S,T) = max(S-K, 0)
+// Initial Condition under Heat equation transformation: u(x,0) = Ke^{-\alpha x}\max(e^x-1 , 0)
 template <int dim>
-class TerminalCondition : public Function<dim> 
+class InitialCondition : public Function<dim> 
 {
     public:
-        TerminalCondition(Black_Scholes_parameters &parameters)
+        InitialCondition(Black_Scholes_parameters &parameters)
             : Function<dim> ()
             , params(parameters)
         {}
 
         virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
         {
-            const double S = p[0];
-            return std::max(S - params.K, 0.0);
+            const double x = p[0];
+            return params.K * std::max(std::exp(x)-1.0, 0.0) * std::exp(-params.alpha*x);
         }
 
     private:
         Black_Scholes_parameters params;
 };
 
-// Max Price Condition (discount): u(S_max, t) = S_max - Ke^{-r(T-t)}
+// Original Max Price Condition (discount): V(S_max, t) = S_max - Ke^{-r(T-t)}
+// Under Heat equation transformation: u(x_max, \tau) = e^{\alpha*x_max - \beta\tau}(S_max - Ke^{-r(2\tau/sigma^2)})
 template <int dim>
 class MaxPriceCondition : public Function<dim>
 {
     public:
-        MaxPriceCondition(Black_Scholes_parameters &parameters, double t)
+        MaxPriceCondition(Black_Scholes_parameters &parameters, double tau)
             : Function<dim> ()
             , params(parameters)
-            , t(t)
+            , tau(tau)
         {}
 
         virtual double value(const Point<dim> &p, const unsigned int /*component*/) const override
         {
-            double S_max = p[0];
-            return S_max - params.K * std::exp(-params.r * (params.T - t));
+            double x_max = p[0];
+            return std::exp(params.alpha*x_max - params.beta*tau) * (params.S_max - params.K*std::exp(-params.r*(2*tau/std::pow(params.sigma,2))));
         }
         
     private:
         Black_Scholes_parameters params;
-        double t;
+        double tau;
 };
 
 
-// Min Price condition: u(S_min, t) = 0
+// Min Price condition: V(S_min, t) = 0
+// No change under transformation: u(x_min, \tau) = 0
 template <int dim>
 class MinPriceCondition : public Function<dim>
 {
@@ -124,24 +140,26 @@ class BlackScholes
         void run();
     private:
         void setup_system();
-        void applying_terminal_condition();
+        void apply_initial_condition();
         void assemble_mass_and_stiffness_matrices();
-        void apply_boundary_conditions(double t);
+
+        void apply_boundary_conditions(double tau);
         void SDIRK_2_solve();
-        void output_timestep(double t);
-        void output_time_evolution();
+        void transform_solution();
+        void output_timestep(double tau);
 
-        double compute_stabilization_parameter(double cell_size, double S);
-
+        // Solver paramters
         Black_Scholes_parameters params;
         unsigned int degree;
         unsigned int n_refinement_cycles;
         unsigned int cycle;
 
+        // Finite element components
         FE_Q<dim>                   fe;
         Triangulation<dim>          triangulation;
         DoFHandler<dim>             dof_handler;
 
+        // Constraints and matrices components
         AffineConstraints<double>   constraints;
         SparseMatrix<double>        mass_matrix;
         SparseMatrix<double>        stiffness_matrix;
@@ -149,6 +167,7 @@ class BlackScholes
         DynamicSparsityPattern      dsp;
         SparsityPattern             sparsity_pattern;
 
+        // Solution and RHS containers
         Vector<double>              solution;
         Vector<double>              old_solution;
         std::vector<Vector<double>> all_solutions;
@@ -197,11 +216,11 @@ void BlackScholes<dim>::setup_system()
 }
 
 template <int dim>
-void BlackScholes<dim>::applying_terminal_condition()
+void BlackScholes<dim>::apply_initial_condition()
 {
     // Interpolating terminal condition
-    TerminalCondition<dim> terminal_condition(params);
-    VectorTools::interpolate(dof_handler, terminal_condition, solution);
+    InitialCondition<dim> initial_condition(params);
+    VectorTools::interpolate(dof_handler, initial_condition, solution);
 
     // Storing the interpolated condition
     all_solutions.push_back(solution);
@@ -209,18 +228,6 @@ void BlackScholes<dim>::applying_terminal_condition()
 
     // Output
     //output_timestep(params.T);
-}
-
-template <int dim>
-double BlackScholes<dim>::compute_stabilization_parameter(double cell_size, double S)
-{
-    // Computing Peclet number
-    double Pe = (cell_size * params.r * S) / (std::pow(params.sigma*S, 2));
-
-    // Stabilization parameter that is "optimal" for Convection-Diffusion equation
-    // Note that we have Convection-Diffusion-Reaction in Black-Scholes that we have but for start, this will do
-
-    return (cell_size / (2 * params.r * S)) * (1.0/std::tanh(Pe) + (1.0/Pe));
 }
 
 template <int dim>
@@ -246,37 +253,17 @@ void BlackScholes<dim>::assemble_mass_and_stiffness_matrices()
         cell_mass_matrix = 0;
         cell_stiffness_matrix = 0;
 
-        double cell_size = cell->diameter();
-
         for (unsigned int q_index = 0; q_index < quadrature.size(); q_index++)
         {
-            double S = fe_values.quadrature_point(q_index)[0];
-            double eta = compute_stabilization_parameter(cell_size, S);
-
             for (unsigned int i = 0; i< fe.dofs_per_cell; i++)
             {
                 for (unsigned int j = 0; j < fe.dofs_per_cell; j++)
                 {
                     /*  Mass matrix terms calculation */
                     cell_mass_matrix(i, j) += fe_values.shape_value(i,q_index) * fe_values.shape_value(j,q_index) * fe_values.JxW(q_index);
-                    cell_mass_matrix(i, j) += eta * params.r * S * fe_values.shape_grad(i, q_index)[0] * fe_values.shape_value(j,q_index) * fe_values.JxW(q_index);
                     
                     /* Stiffness matrix */
-                    // Diffusion term
-                    cell_stiffness_matrix(i, j) += (std::pow(S * params.sigma, 2) )/ 2.0
-                                                * fe_values.shape_grad(i,q_index)[0] * fe_values.shape_grad(j,q_index)[0];
-                    cell_stiffness_matrix(i, j) += eta*params.r*std::pow(S,3) * fe_values.shape_hessian(j,q_index)[0][0] * fe_values.shape_grad(i, q_index)[0];
-
-                    // Convection term
-                    cell_stiffness_matrix(i, j) += params.r*S * fe_values.shape_value(i, q_index) * fe_values.shape_grad(j,q_index)[0];
-                    cell_stiffness_matrix(i, j) += std::pow(params.r*S, 2) * eta * fe_values.shape_grad(j,q_index)[0];
-
-                    // Reaction term
-                    cell_stiffness_matrix(i, j) -= params.r * fe_values.shape_value(i, q_index) * fe_values.shape_value(j, q_index);
-                    cell_stiffness_matrix(i, j) -= std::pow(params.r,2) * eta * S * fe_values.shape_grad(i, q_index)[0];
-                    
-                    // Differential weights terms multiplication to finish the integrand
-                    cell_stiffness_matrix(i, j) *= fe_values.JxW(q_index);
+                    cell_stiffness_matrix(i, j) += fe_values.shape_grad(i,q_index)[0] * fe_values.shape_grad(j,q_index)[0] * fe_values.JxW(q_index);
                 }
             }
         }
@@ -290,201 +277,39 @@ void BlackScholes<dim>::assemble_mass_and_stiffness_matrices()
 }
 
 template <int dim>
-void BlackScholes<dim>::apply_boundary_conditions(double t)
+void BlackScholes<dim>::apply_boundary_conditions(double tau)
 {
-    std::map<unsigned int, double> boundary_values;
-    
-    // S_min boundary interpolation
-    unsigned int boundary_id_min = 0;
-    VectorTools::interpolate_boundary_values(dof_handler, boundary_id_min, MinPriceCondition<dim>(params), boundary_values);
 
-    // S_max boundary interpolation
-    unsigned int boundary_id_max = 1;
-    VectorTools::interpolate_boundary_values(dof_handler, boundary_id_max, MaxPriceCondition<dim>(params, t), boundary_values);
-
-    // Applying BCs to system_matrix and RHS
-    MatrixTools::apply_boundary_values(boundary_values, system_matrix, solution, rhs);
 }
 
 template <int dim>
 void BlackScholes<dim>::SDIRK_2_solve()
 {
-    /*
-        Coefficient DiffEq system (for mass matrix M and stiffness matrix K): M(du/d_tau) = Ku
-        This will be solved with 2-stage SDIRK method which uses the constant \gamma = 1-1/sqrt(2)
-        
-        Based on Butcher's table (with the fact du/d\tau = du/dt), the system matrix is: A = M - \gamma*d_tau*K
-        The stages B_1 and B_2 are calculated from:
-            A * B_1 = M * u_{n}
-            A * B_2 = K * (u_{n} + \gamma*d_\tau*B_1)
-        Update:
-            u_{n+1} = u_{n} + d_tau * [(1-\gamma)*B_1 + \gamma * B_2]
-    */
 
-    // Time-step size
-    double d_tau = (params.T - params.t_0) / (params.n_time_steps);
-
-    // L-stabe constant for SDIRK-2
-    double gamma = 1.0 - (std::sqrt(2) / 2.0);
-
-    // Assemble mass and stiffness matrix
-    assemble_mass_and_stiffness_matrices();
-
-    // Initialize (direct) solver
-    SparseDirectUMFPACK solver;
-
-    // Initialize stages solution vectors
-    Vector<double> stage_1(solution.size());
-    Vector<double> stage_2(solution.size());
-
-    for (unsigned int n = 0; n < params.n_time_steps; n++)
-    {
-        // Extracting times
-        double current_time = params.T - n*d_tau;
-        double next_time = current_time - d_tau;
-
-        // Stage 1
-        stiffness_matrix.vmult(rhs, old_solution);
-        system_matrix.copy_from(mass_matrix);
-        system_matrix.add(-d_tau*gamma, stiffness_matrix);
-        solver.initialize(system_matrix);
-        apply_boundary_conditions(next_time);
-        solver.vmult(stage_1, rhs);
-
-        // Stage 2
-        stiffness_matrix.vmult(rhs, old_solution);
-        rhs.add(gamma*d_tau, stage_1);
-        system_matrix.copy_from(mass_matrix);
-        system_matrix.add(-d_tau*gamma, stiffness_matrix);
-        apply_boundary_conditions(next_time);
-        solver.initialize(system_matrix);
-        solver.vmult(stage_2, rhs);
-
-        // Update solution
-        solution = old_solution;
-        solution.add((1-gamma)*d_tau, stage_1);
-        solution.add(gamma*d_tau, stage_2);
-
-        apply_boundary_conditions(next_time);
-
-        // Storing solution
-        all_solutions.push_back(solution);
-        old_solution = solution;
-
-        // Output last timestep
-        if (std::abs(next_time - params.t_0) < 1e-8) {output_timestep(std::abs(next_time));}
-    }
-    std::cout << "Finished SDIRK-2 time-stepping" << std::endl;
 }
 
 template <int dim>
-void BlackScholes<dim>::output_timestep(double t)
+void BlackScholes<dim>::transform_solution()
 {
-    DataOut<dim> data_out;
-    data_out.attach_dof_handler(dof_handler);
-    data_out.add_data_vector(solution, "V");
-    data_out.build_patches();
 
-    std::string status = "t=" + std::to_string(t) + "_cycle_" + std::to_string(cycle+1);
-
-    std::ofstream output_vtu(status + ".vtu");
-    data_out.write_vtu(output_vtu);
-
-    std::ofstream output_plot(status + ".gnuplot");
-    data_out.write_gnuplot(output_plot);
 }
 
 template <int dim>
-void BlackScholes<dim>::output_time_evolution() 
+void BlackScholes<dim>::output_timestep(double tau)
 {
-    // Create a 2D time-evolution grid in (S,t)
-    Triangulation<dim+1> spacetime_triangulation;
-    std::vector<unsigned int> repetitions = {triangulation.n_active_cells(), params.n_time_steps};
-    Point<dim+1> bottom_left(params.S_min, params.t_0);
-    Point<dim+1> top_right(params.S_max, params.T);
-    GridGenerator::subdivided_hyper_rectangle(spacetime_triangulation, repetitions, bottom_left, top_right);
 
-    // Distribute DoFs on the evolution grid
-    FE_Q<dim+1> spacetime_fe(degree);
-    DoFHandler<dim+1> spacetime_dof_handler(spacetime_triangulation);
-    spacetime_dof_handler.distribute_dofs(spacetime_fe);
-
-    // Initialize solution vector
-    Vector<double> spacetime_solution(spacetime_dof_handler.n_dofs());
-    double dt = (params.T - params.t_0) / params.n_time_steps;
-
-    // Interpolating the solution on the grid
-    std::vector<Point<dim+1>> support_points(spacetime_dof_handler.n_dofs());
-    DoFTools::map_dofs_to_support_points(MappingQ1<dim+1>(), spacetime_dof_handler, support_points);
-    for (unsigned int i = 0; i < spacetime_dof_handler.n_dofs(); ++i)
-    {
-        // Extracting (S,t) coordinates of the support point
-        const Point<dim+1>& point = support_points[i];
-        double S = point[0];
-        double t = point[1]; 
-        
-        // Find time-based index within stored-solutions to interpolate
-        int time_index = std::round((t - params.t_0) / dt);
-        time_index = std::max(0, std::min(time_index, static_cast<int>(all_solutions.size() - 1)));
-        
-        // Interpolate
-        Vector<double> interpolated_value(1);
-        VectorTools::point_value(dof_handler, all_solutions[time_index], Point<dim>(S), interpolated_value);
-        spacetime_solution(i) = interpolated_value(0);
-    }
-
-
-    // Output the spacetime solution
-    DataOut<dim+1> data_out;
-    data_out.attach_dof_handler(spacetime_dof_handler);
-    data_out.add_data_vector(spacetime_solution, "V");
-    data_out.build_patches();
-
-    std::string file = "Black-Scholes-evolution";
-    
-    std::ofstream output_vtu(file + ".vtu");
-    data_out.write_vtu(output_vtu);
-
-    std::ofstream output_plot(file + ".gnuplot");
-    data_out.write_gnuplot(output_plot);
-    
-    std::cout << "Time evolution solution written to: " << file << std::endl;
 }
+
 
 template <int dim>
 void BlackScholes<dim>::run()
 {
-    for (; cycle < n_refinement_cycles; cycle++)
-    {
-        if (cycle == 0) // Making the 1d spatial grid on first cycle
-        {
-            GridGenerator::subdivided_hyper_cube(triangulation, params.n_price_cells, params.S_min, params.S_max);
-        }
-        else    // Refine for subsequent cycles
-        {
-            Vector<float> estimated_error_per_cell(triangulation.n_active_cells());
-            KellyErrorEstimator<dim>::estimate(dof_handler, QGauss<dim - 1>(degree + 1), {}, solution,estimated_error_per_cell);
-            GridRefinement::refine_and_coarsen_fixed_number(triangulation, estimated_error_per_cell, 0.1, 0.01); 
+    // Setup Grid
+    GridGenerator::subdivided_hyper_cube(triangulation, params.n_price_cells, params.x_min, params.x_max);
 
-            triangulation.execute_coarsening_and_refinement();
-        }
-
-        setup_system();
-        applying_terminal_condition();
-
-        SDIRK_2_solve();
-
-        // Some test-values
-        std::vector<double> prices = {75, 100, 125, 150};
-        Vector<double> values(1);
-        for (unsigned int i = 0; i < prices.size(); i++)
-        {
-            VectorTools::point_value(dof_handler, solution, Point<dim>(prices[i]), values);
-            std::cout << "Option value at " << prices[i] << ": " << values[0] << std::endl;
-        }
-        if (cycle == 0) {output_time_evolution();}
-        std::cout << std::endl;
-    }
+    setup_system();
+    apply_initial_condition();
+    assemble_mass_and_stiffness_matrices();
 }
 
 /* ------------------------------------------------------------------------------
@@ -496,7 +321,7 @@ int main()
     {
         Black_Scholes_parameters parameters;
         const unsigned int degree = 1;
-        const unsigned int refinement_cycles = 2;
+        const unsigned int refinement_cycles = 1;
 
         BlackScholes<1> Black_Scholes_solver(parameters, degree, refinement_cycles);
         Black_Scholes_solver.run();
