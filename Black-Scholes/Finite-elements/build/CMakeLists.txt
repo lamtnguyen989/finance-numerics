@@ -6,9 +6,7 @@
 # Set the name of the project and target:
 SET(TARGET "black-scholes")
 
-SET(TARGET_SRC
-  ${TARGET}.cc
-)
+SET(TARGET_SRC ../src/${TARGET}.cc)
 
 # Minimum resources and versions
 CMAKE_MINIMUM_REQUIRED(VERSION 4.0.1)

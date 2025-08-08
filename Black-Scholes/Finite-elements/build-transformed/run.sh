@@ -10,7 +10,7 @@ else
 fi
 
 # Clean 
-rm black-scholes
+rm black-scholes-transformed
 #rm -rf CMakeFiles/
 #rm CMakeCache.txt
 #rm Makefile
@@ -19,7 +19,7 @@ make clean
 # Main compilation and run command
 cmake .
 make -j$THREADS $VERBOSE_FLAG
-./black-scholes
+./black-scholes-transformed
 
 : '
 # Keep all of the outputs in a directory
