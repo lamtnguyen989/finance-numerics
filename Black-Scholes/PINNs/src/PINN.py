@@ -6,9 +6,13 @@ from kan import KAN
 import torch.optim as optim
 from scipy.stats import norm
 import seaborn as sns
+     
 
 class BlackScholesPINN:
     def __init__(self, param, KAN_param, conditions, device):
+        """
+        Constructor
+        """
         # Black-Scholes
         self.r = param["Risk-free rate"]
         self.sigma = param["Volatility"]
@@ -21,12 +25,13 @@ class BlackScholesPINN:
         self.boundary_max = conditions["Max boundary"]
         self.boundary_min = conditions["Min boundary"]
 
-        # Feedforward (Kolmogorov-Arnold) Neural Network
+        # Neural Network structure for price process
         self.model = KAN(width=KAN_param["Layers"],
                         grid=KAN_param["Grid size"],
                         k=KAN_param["Spline order"],
                         auto_save=False).to(device)
         
+        # Other Neural Networks components
         self.device = device
         self.model_path = KAN_param["Model path"]
 
@@ -40,6 +45,9 @@ class BlackScholesPINN:
         self.loss_tracker = {"total" : [], "residual" : [], "terminal" : [], "max_price" : [], "min_price" : [], "MSE" : []}
     
     def residual(self, S, tau):
+        """
+        Residual computation for price process
+        """
         # Make inputs to be tensors that requires grad
         S.requires_grad_(True)
         tau.requires_grad_(True)
@@ -74,7 +82,9 @@ class BlackScholesPINN:
         return -V_tau + (V_SS / 2.0)*(self.sigma * S)**2 + (self.r * S * V_S) - (self.r * V)
     
     def loss(self, n_collocation_pts=5000, n_terminal_pts=1000, n_each_boundary_pts=2000):
-
+        """
+        Loss for price process
+        """
         # Sampling and calculating loss at interior points where PDE condition need to be met
         S_collocations = torch.rand(n_collocation_pts, 1, device=self.device) * (self.S_max - self.S_min) + self.S_min
         tau_collocations = self.T - (torch.rand(n_collocation_pts, 1, device=self.device) * (self.T - self.t_0) + self.t_0)
@@ -113,6 +123,9 @@ class BlackScholesPINN:
 
 
     def train(self, epochs=2001, print_interval=100):
+        """
+        Training price process model
+        """
         # Setup the model to be trained
         self.model.train()
         self.model.speed()  # This is needed for parallelization in the training
@@ -162,6 +175,9 @@ class BlackScholesPINN:
         print(f"Best model occured at epoch {best_epoch}, with lowest loss of {smallest_loss}")
 
     def predict(self, S, t):
+        """
+        Predict the price process
+        """
         self.model.eval()
         with torch.no_grad():
             tau = self.T - t
@@ -169,14 +185,18 @@ class BlackScholesPINN:
             return self.model(input)
     
     def _Black_Scholes_formula(self, S, t):
-        # Computing Black-Scholes formula within the interior (non-boundary points)
+        """
+        Computing Black-Scholes formula within the interior (non-boundary points)
+        """
         tau = self.T - t 
         d_plus = (torch.log(S/self.K) + tau*(self.r + self.sigma**2/2.0)) / (self.sigma * torch.sqrt(tau))
         d_minus = d_plus - self.sigma*torch.sqrt(tau)
         return S*torch.special.ndtr(d_plus) - torch.special.ndtr(d_minus)*(self.K*torch.exp(-self.r*(tau)))
 
     def analytical_solution(self, S, t):
-
+        """
+        Black-Scholes price process analytical solution
+        """
         # Note that the B-S formula does not apply (and not even make sense) at the boundary so we need to deal with them seperately
         at_maturity = (self.T - t) < 1e-10
         zero_price = S < 1e-10
@@ -189,6 +209,9 @@ class BlackScholesPINN:
         return solution
             
     def load_model(self, model_path):
+        """
+        Load trained model
+        """
         try:
             model_info = torch.load(model_path, map_location=self.device)
             self.model.load_state_dict(model_info["Model states"])
@@ -198,7 +221,9 @@ class BlackScholesPINN:
             print("Error loading model")
 
     def benchmark(self, n_price_points=100, n_time_points=300):
-
+        """
+        Benchmark price process model
+        """
         self.load_model(self.model_path)
 
         # Create meshgrid for benchmarking
@@ -316,3 +341,31 @@ class BlackScholesPINN:
         plt.grid(True)
         plt.tight_layout()
         plt.show()
+
+    def standard_normal_pdf(self, x):
+        """
+        For some reason, pytorch does not have a pdf implementation for normal distribution
+        Yes, Normal.log_prob exists, but it's dumb to always exponentiate that results every time
+        """
+        if not torch.is_tensor(x):
+            x = torch.tensor(x)
+        return torch.exp(-x**2 / 2) / torch.sqrt(torch.tensor(2 * torch.pi))
+    
+    def compute_analytical_greeks(self, S, t):
+        """
+        Computing analytical Greeks  
+        """
+        # Variables and fuctions needed for computations
+        tau = self.T - t 
+        d_plus = (torch.log(S/self.K) + tau*(self.r + self.sigma**2/2.0)) / (self.sigma * torch.sqrt(tau))
+        d_minus = d_plus - self.sigma*torch.sqrt(tau)
+
+        # Greeks analytical computation proper
+        delta = torch.special.ndtr(d_plus)
+        gamma = self.standard_normal_pdf(d_plus) / (S * self.sigma * torch.sqrt(tau))
+        vega = S * self.standard_normal_pdf(d_plus) * torch.sqrt(tau)
+        theta = -(S * self.standard_normal_pdf(d_plus) * self.sigma) / (2*torch.sqrt(tau)) - self.r*self.K*torch.exp(-self.r*tau)*torch.special.ndtr(d_minus)
+        rho = self.K * tau * torch.exp(-self.r*tau)*torch.special.ndtr(d_minus)
+
+        # Return the Greeks
+        return delta, gamma, vega, theta, rho
