@@ -351,6 +351,15 @@ class BlackScholesPINN:
             x = torch.tensor(x)
         return torch.exp(-x**2 / 2) / torch.sqrt(torch.tensor(2 * torch.pi))
     
+    def dirac_delta(self, x, center, epsilon=1e-11):
+        """Approximates the Dirac delta function using a Gaussian."""
+        x = x.clone().detach()
+        center = torch.tensor(center)
+
+        val = (1 / (epsilon * torch.sqrt(torch.tensor(2 * torch.pi)))) * torch.exp(-((x - center)**2) / (2 * epsilon**2))
+        val = torch.where(torch.abs(x-center) < 1e-10, torch.tensor(float("inf")), val)
+        return val
+    
     def compute_analytical_greeks(self, S, t):
         """
         Computing analytical Greeks  
@@ -360,12 +369,19 @@ class BlackScholesPINN:
         d_plus = (torch.log(S/self.K) + tau*(self.r + self.sigma**2/2.0)) / (self.sigma * torch.sqrt(tau))
         d_minus = d_plus - self.sigma*torch.sqrt(tau)
 
-        # Greeks analytical computation proper
+        # Formulas
         delta = torch.special.ndtr(d_plus)
         gamma = self.standard_normal_pdf(d_plus) / (S * self.sigma * torch.sqrt(tau))
         vega = S * self.standard_normal_pdf(d_plus) * torch.sqrt(tau)
         theta = -(S * self.standard_normal_pdf(d_plus) * self.sigma) / (2*torch.sqrt(tau)) - self.r*self.K*torch.exp(-self.r*tau)*torch.special.ndtr(d_minus)
         rho = self.K * tau * torch.exp(-self.r*tau)*torch.special.ndtr(d_minus)
+
+        # Adjusting values at terminal time to ensure continuity (No numerical NaNs)
+        delta = torch.where(tau == 0, (S > self.K), delta) 
+        gamma = torch.where(tau == 0, self.dirac_delta(S, self.K), gamma)
+        vega = torch.where(tau == 0, 0.0, vega)
+        theta = torch.where(tau == 0, torch.where(S > self.K, -self.r * self.K, torch.where(S == self.K, float("-inf"), torch.tensor(0.0))), theta)
+        rho = torch.where(tau == 0, (S > self.K) * self.K * tau*torch.exp(-self.r*tau), rho)
 
         # Return the Greeks
         return delta, gamma, vega, theta, rho
