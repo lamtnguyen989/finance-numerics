@@ -369,3 +369,71 @@ class BlackScholesPINN:
 
         # Return the Greeks
         return delta, gamma, vega, theta, rho
+    
+    def plot_analytical_greeks(self, n_price_points=100, n_time_points=300):
+        """
+        Plotting the evolution of analytical Greeks  
+        """
+        # Price and time ranges
+        S_vals = torch.linspace(self.S_min, self.S_max, n_price_points, device=self.device)
+        t_vals = torch.linspace(self.t_0, self.T, n_time_points, device=self.device)
+
+        # Mesh grid
+        S_mesh, t_mesh = torch.meshgrid(S_vals, t_vals, indexing='ij')
+        S_flat = S_mesh.reshape(-1, 1)
+        t_flat = t_mesh.reshape(-1, 1)
+
+        # Compute Greeks
+        delta, gamma, vega, theta, rho = self.compute_analytical_greeks(S_flat, t_flat)
+
+        # Reshape for plotting
+        delta = delta.reshape(n_price_points, n_time_points).cpu().numpy()
+        gamma = gamma.reshape(n_price_points, n_time_points).cpu().numpy()
+        vega = vega.reshape(n_price_points, n_time_points).cpu().numpy()
+        theta = theta.reshape(n_price_points, n_time_points).cpu().numpy()
+        rho = rho.reshape(n_price_points, n_time_points).cpu().numpy()
+            
+        S_mesh_np = S_mesh.cpu().numpy()
+        t_mesh_np = t_mesh.cpu().numpy()
+            
+        # Create evolution plots
+        fig = plt.figure(figsize=(24, 12))
+        fig.suptitle('Black-Scholes Greeks Time Evolution', y=1.02)
+        # Delta 
+        ax1 = fig.add_subplot(231, projection='3d')
+        ax1.plot_surface(S_mesh_np, t_mesh_np, delta, cmap='viridis')
+        ax1.set_title('Delta')
+        ax1.set_xlabel('S')
+        ax1.set_ylabel('t')
+        ax1.set_zlabel('Delta')
+        # Gamma
+        ax2 = fig.add_subplot(232, projection='3d')
+        ax2.plot_surface(S_mesh_np, t_mesh_np, gamma, cmap='viridis')
+        ax2.set_title('Gamma')
+        ax2.set_xlabel('S')
+        ax2.set_ylabel('t')
+        ax2.set_zlabel('Gamma')
+        # Vega
+        ax3 = fig.add_subplot(233, projection='3d')
+        ax3.plot_surface(S_mesh_np, t_mesh_np, vega, cmap='viridis')
+        ax3.set_title('Vega')
+        ax3.set_xlabel('S')
+        ax3.set_ylabel('t')
+        ax3.set_zlabel('Vega')
+        # Theta
+        ax4 = fig.add_subplot(234, projection='3d')
+        ax4.plot_surface(S_mesh_np, t_mesh_np, theta, cmap='viridis')
+        ax4.set_title('Theta')
+        ax4.set_xlabel('S')
+        ax4.set_ylabel('t')
+        ax4.set_zlabel('Theta')
+        # Rho
+        ax5 = fig.add_subplot(235, projection='3d')
+        ax5.plot_surface(S_mesh_np, t_mesh_np, rho, cmap='viridis')
+        ax5.set_title('Rho')
+        ax5.set_xlabel('S')
+        ax5.set_ylabel('t')
+        ax5.set_zlabel('Rho')
+        
+        plt.tight_layout()
+        plt.show()
