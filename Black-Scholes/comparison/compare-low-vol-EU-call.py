@@ -159,7 +159,7 @@ ax5 = fig.add_subplot(2, 3, 5)
 contour5 = ax5.contourf(X_mesh, Y_mesh, pinn_error,  levels=lvl, cmap="Reds")
 ax5.set_xlabel("S")
 ax5.set_ylabel("t")
-ax5.set_title("FE Pointwise Error vs Analytical")
+ax5.set_title("PINN Pointwise Error vs Analytical")
 fig.colorbar(contour5, ax=ax5)
 
 # Comparison at t_0
@@ -178,7 +178,7 @@ plt.tight_layout()
 plt.show()
 
 # Print error stats
-output = "stats.txt"
+output = "error_stats.txt"
 with open(output, "w") as f:
     print("============== Error Statistics ==============", file=f)
     print("\nFinite Element Solution:", file=f)
