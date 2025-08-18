@@ -41,5 +41,7 @@ for base in "${BASE[@]}"; do
     done
 done
 
+echo -e "All outputs moved to $DIR folder."
 
-echo -e "All outputs moved to $DIR folder"
+# Plot the evolution result
+python3 plot-evolution.py
