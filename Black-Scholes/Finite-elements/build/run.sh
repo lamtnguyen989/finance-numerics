@@ -43,5 +43,9 @@ done
 
 echo -e "All outputs moved to $DIR folder."
 
+# Copy the evolution file to the PINNs folder for later comparison
+cp output/Black-Scholes-evolution.gnuplot ../../PINNs/testing/Advection-dominated/
+echo -e "A copy of the time-evolution result was written to PINNs/testing/ directory for comparison."
+
 # Plot the evolution result
 python3 plot-evolution.py
