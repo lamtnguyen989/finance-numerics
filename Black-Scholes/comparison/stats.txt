@@ -1,0 +1,11 @@
+============== Error Statistics ==============
+
+Finite Element Solution:
+Max error: 0.599009
+Mean error: 0.066872
+RMSE: 0.123812
+
+PINN Solution:
+Max error: 0.397591
+Mean error: 0.025289
+RMSE: 0.041481
