@@ -108,10 +108,6 @@ V_pinn = BSP.predict(S, t).cpu().numpy().reshape(X_mesh.shape)
 # Analytical solution
 V_analytical = BSP.analytical_solution(S, t).cpu().numpy().reshape(X_mesh.shape)
 
-# Calculate errors
-fe_error = np.abs(Z - V_analytical)
-pinn_error = np.abs(V_pinn - V_analytical)
-
 """
 Plotting
 """
@@ -177,18 +173,43 @@ ax6.grid(True)
 plt.tight_layout()
 plt.show()
 
+# Error calculation helper
+def _maape(F_pred, F_true, epsilon=1e-16):
+    # Just checking for array output to be "good" citizen
+    F_pred = np.asarray(F_pred)
+    F_true = np.asarray(F_true)
+
+    # Using the fact that arctan(x) -> \pi/2 as x -> \infty we can shut the division error up
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rel_error_quotient = np.abs((F_true - F_pred) / F_true)
+    
+    # Compute the aractan and modify where the thing is indefinite to \pi/2
+    ape = np.arctan(rel_error_quotient)
+    ape[np.isnan(ape) | np.isinf(ape)] = np.pi / 2
+
+    # Return the mean
+    return np.mean(ape)
+
 # Print error stats
 output = "error_stats.txt"
+
+# Calculate errors
+fe_error = np.abs(Z - V_analytical)
+pinn_error = np.abs(V_pinn - V_analytical)
+
 with open(output, "w") as f:
     print("============== Error Statistics ==============", file=f)
+
     print("\nFinite Element Solution:", file=f)
     print(f"Max error: {np.max(fe_error):.6f}", file=f)
     print(f"Mean error: {np.mean(fe_error):.6f}", file=f)
+    print(f"Mean Arctangent Absolute Percentage Error (MAAPE): {_maape(Z, V_analytical):.6f}", file=f)
     print(f"RMSE: {np.sqrt(np.mean(fe_error**2)):.6f}", file=f)
 
     print("\nPINN Solution:", file=f)
     print(f"Max error: {np.max(pinn_error):.6f}", file=f)
     print(f"Mean error: {np.mean(pinn_error):.6f}", file=f)
+    print(f"Mean Arctangent Absolute Percentage Error (MAAPE): {_maape(V_pinn, V_analytical):.6f}", file=f)
     print(f"RMSE: {np.sqrt(np.mean(pinn_error**2)):.6f}", file=f)
 
 print(f"Error statistics has been wrriten to {output}")
