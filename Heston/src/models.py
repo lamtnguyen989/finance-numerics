@@ -1,3 +1,13 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+from kan import KAN
+import torch.optim as optim
+from scipy.stats import norm
+import seaborn as sns
+
+
 class HestonPINN:
     def __init__(self):
         pass
