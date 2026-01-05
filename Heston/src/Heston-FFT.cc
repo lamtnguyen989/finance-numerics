@@ -6,7 +6,7 @@ using Complex = Kokkos::complex<float>;
 
 struct HestonParameters
 {
-
+ 
 }
 
 int main(int argc, char* argv[])
