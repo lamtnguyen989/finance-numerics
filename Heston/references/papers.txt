@@ -1,0 +1,2 @@
+1. Option valuation using the fast Fourier transform (Carr-Madan): https://engineering.nyu.edu/sites/default/files/2018-08/CarrMadan2_0.pdf 
+2. Full and fast calibration of the Heston stochastic volatility model (Cui, et al): https://arxiv.org/pdf/1511.08718 
