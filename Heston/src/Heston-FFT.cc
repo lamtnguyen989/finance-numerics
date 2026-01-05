@@ -3,8 +3,11 @@
 #include <KokkosFFT.hpp>
 //#include <Kokkos_Random.hpp>
 
+/* Macros */
 using Complex = Kokkos::complex<float>;
 using exec_space = Kokkos::DefaultExecutionSpace;
+
+/* Function declearations */
 
 /* Heston model parameters */
 struct HestonParameters
@@ -16,16 +19,10 @@ struct HestonParameters
     float sigma;    // Vol of vol
 };
 
-/* Heston model FFT solver */
-class Heston_FFT
+KOKKOS_INLINE_FUNCTION heston_log_characteristic()
 {
-    public:
-        Heston_FFT() {}
     
-    private:
-
-};
-
+}
 
 /* main() */
 int main(int argc, char* argv[])
