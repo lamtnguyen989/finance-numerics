@@ -7,6 +7,7 @@
 using Complex = Kokkos::complex<double>;
 using exec_space = Kokkos::DefaultExecutionSpace;
 #define EPSILON 5e-15
+const Complex i = Complex(0.0, 1.0);
 
 /* Function declearations */
 
@@ -34,10 +35,9 @@ class Heston_FFT    // Leave this here for now to see if I need to do OOP
 */
 
 
-KOKKOS_INLINE_FUNCTION Complex heston_characteristic(double u, double r, double t, double S_0, HestonParameters params)
+KOKKOS_INLINE_FUNCTION Complex heston_characteristic(Complex u, double r, double t, double S_0, HestonParameters params)
 {
     // A bunch of repeated constants in the calculation
-    Complex i(0.0, 1.0);
     Complex xi = params.kappa - i*params.rho*params.sigma*u;
     Complex d = Kokkos::sqrt(xi*xi + params.sigma*params.sigma*(u*u + i*u));
     //Complex g_1 = (xi + d) / (xi - d);
@@ -48,7 +48,7 @@ KOKKOS_INLINE_FUNCTION Complex heston_characteristic(double u, double r, double 
                             ? (1.0 - g_2*Kokkos::exp(-d*t)) / (1.0 - g_2) 
                             : Complex(EPSILON, EPSILON);
 
-    Complex last_term_frac = Kokkos::abs(1.0 - g_2*Kokkos::exp(-d *t)) > EPSILON
+    Complex last_term_frac = Kokkos::abs(1.0 - g_2*Kokkos::exp(-d*t)) > EPSILON
                             ? (1.0 - Kokkos::exp(-d*t)) / (1.0 - g_2*Kokkos::exp(-d*t))
                             : Complex(EPSILON, EPSILON);
 
@@ -60,9 +60,10 @@ KOKKOS_INLINE_FUNCTION Complex heston_characteristic(double u, double r, double 
     return Kokkos::exp(exponent);
 }
 
-KOKKOS_INLINE_FUNCTION Complex damped_call()
+KOKKOS_INLINE_FUNCTION Complex damped_call(Complex v, double r, double t, double S_0, HestonParameters params, double alpha)
 {
-
+    Complex phi = heston_characteristic((v - i*(alpha + 1.0)), r, t, S_0, params);
+    return (Kokkos::exp(-r*t) * phi) / (alpha*alpha + alpha - v*v +i*(2.0*alpha + 1.0)*v);
 }
 
 
@@ -71,8 +72,13 @@ int main(int argc, char* argv[])
 {
     Kokkos::initialize(argc, argv);
     {
-        double e = 1.0/5e-15;
-        Kokkos::printf("%lf\n", e);
+        Complex a(1.0, 2.0);
+        Complex scalar(4.0, 0.0);
+        Complex m = scalar*a;
+        Complex s = 4.0*a;
+
+        Kokkos::printf("Complex mult: %lf + %lfi\n", m.real(), m.imag());
+        Kokkos::printf("Double mult: %lf + %lfi\n", s.real(), s.imag());
     }
     Kokkos::finalize();
 }

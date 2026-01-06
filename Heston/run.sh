@@ -10,7 +10,7 @@ git clone --recursive https://github.com/kokkos/kokkos-fft.git
 cd ..
 
 # Cleaning logs
-rm -f run.log 
+rm -f run.log build-carr-madan/hestonFFT
 
 # Cmake config
 BUILD_DIR=build-carr-madan
