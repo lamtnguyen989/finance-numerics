@@ -9,6 +9,9 @@ cd tpls
 git clone --recursive https://github.com/kokkos/kokkos-fft.git
 cd ..
 
+# Cleaning logs
+rm -f run.log 
+
 # Cmake config
 BUILD_DIR=build-carr-madan
 cmake   -B $BUILD_DIR \
