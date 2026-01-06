@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(bitReversal LANGUAGES CXX)
+project(hestonFFT LANGUAGES CXX)
 
 # Finding Kokkos
 find_package(Kokkos REQUIRED)
