@@ -7,7 +7,7 @@ using Complex = Kokkos::complex<double>;
 using exec_space = Kokkos::DefaultExecutionSpace;
 #define PI 3.141592653589793
 #define EPSILON 5e-15
-#define i Complex(0.0, 1.0) // It has to be defined due to device code conflict
+#define i Complex(0.0, 1.0) // It has to be defined like this due to device code conflict
 
 
 // ------------------------------------------------------------------------------------ //
@@ -39,10 +39,18 @@ class Heston_FFT
             , alpha(alpha)
         {}
 
-        /* Public methods */
+        /* Pricing methods */
         Kokkos::View<double*> call_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print);
         Kokkos::View<double*> put_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print);
+
+        /* Modify model methods */
         void modify_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
+
+        /* Implied volatility methods */
+            // TODO
+
+        /* Calibration and optimization */
+            // TODO
 
     private:
         /* Data fields */
@@ -101,7 +109,7 @@ Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, uns
     double lambda = (2.0*PI) / (grid_points*eta); // Transformed step size in log-price space
     double bound = 0.5*grid_points*lambda;
 
-    // Compute input for the shifted inverse Fourier transform
+    // Compute input for the shifted phased inverse Fourier transform
     Kokkos::View<Complex*> x("Fourier input", grid_points);
     Kokkos::parallel_for("FFT_input", grid_points,
         KOKKOS_LAMBDA(const unsigned int k) {
@@ -110,8 +118,14 @@ Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, uns
             double v_k = eta*k;
             Complex damped = this->damped_call(Complex(v_k, 0.0));
 
+            // Compute the Simpson quadrature weights
+            double w_k;
+            if (k == 0 || k == grid_points-1)   { w_k = 1.0/3.0;}
+            else if (k % 2 == 1)                { w_k = 4.0/3.0;}
+            else                                { w_k = 2.0/3.0;}
+
             // Modify the damped call price to get the input
-            x(k) = Kokkos::exp(-i*bound*v_k) * damped * eta; 
+            x(k) = Kokkos::exp(-i*bound*v_k) * damped * eta * w_k; 
         }
     );
 
@@ -142,7 +156,8 @@ Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, uns
             KOKKOS_LAMBDA(unsigned int k){
                 Kokkos::printf("%.2lf \t\t %.2lf\n", strikes(k), prices(k));
         });
-        
+        Kokkos::fence();
+        Kokkos::printf("\n");
     }
 
     return prices;
@@ -170,7 +185,8 @@ Kokkos::View<double*> Heston_FFT::put_prices(Kokkos::View<double*> strikes, unsi
             KOKKOS_LAMBDA(unsigned int k){
                 Kokkos::printf("%.2lf \t\t %.2lf\n", strikes(k), prices(k));
         });
-        
+        Kokkos::fence();
+        Kokkos::printf("\n");
     }
 
     return prices;
@@ -211,12 +227,10 @@ int main(int argc, char* argv[])
                 strikes(k) = 80 + k*5.0;
         });
         
-        // Solving the call prices
+        // Computing the call and put prices
         Heston_FFT solver(S_0, r, T, hestonParams, alpha);
         Kokkos::View<double*> call_prices = solver.call_prices(strikes, N, true);
         Kokkos::View<double*> put_prices = solver.put_prices(strikes, N, true);
-
-
     }
     Kokkos::finalize();
 }
