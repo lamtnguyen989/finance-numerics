@@ -233,4 +233,6 @@ int main(int argc, char* argv[])
         Kokkos::View<double*> put_prices = solver.put_prices(strikes, N, true);
     }
     Kokkos::finalize();
+
+    return 0;
 }
