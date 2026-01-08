@@ -1,5 +1,6 @@
 #include <Kokkos_Core.hpp>
 #include <Kokkos_Complex.hpp>
+#include <Kokkos_Random.hpp>
 #include <KokkosFFT.hpp>
 //#include <unistd.h>
 
@@ -21,7 +22,56 @@ struct HestonParameters
     double theta;    // Long-term variance
     double rho;      // Correlation
     double sigma;    // Vol of vol
+
+    // Basically this should be the constructor to be used
+    HestonParameters(double v_0, double kappa, double theta, double rho, double sigma)
+        : v0(v_0) , kappa(kappa), theta(theta), rho(rho), sigma(sigma) {}
+
+    // Empty constructor for manually setting values later
+    HestonParameters() {}
 };
+
+// ------------------------------------------------------------------------------------ //
+/* Particle swarm config */
+struct PSOConfig
+{
+    /* PSO parameters */
+    double w;
+    double c_1;
+    double c_2;
+    double tolerance;
+    unsigned int n_particles;
+    unsigned int max_iter;
+
+    /* Parameters bounds */
+    double v0_min, v0_max;
+    double kappa_min, kappa_max;
+    double theta_min, theta_max;
+    double rho_min, rho_max;
+    double sigma_min, sigma_max;
+
+
+    PSOConfig()
+        : w(0.729843788128) 
+        , c_1(1.49617976566), c_2(1.49617976566) 
+        , tolerance(1e-8) 
+        , n_particles(40), max_iter(100)
+        , v0_min(0.001), v0_max(0.75)
+        , kappa_min(0.1), kappa_max(16.0)
+        , theta_min(0.001), theta_max(0.5)
+        , rho_min(-0.999), rho_max(0.999)
+        , sigma_min(0.01), sigma_max(1.1)
+        {}
+};
+
+// ------------------------------------------------------------------------------------ //
+/* Particle */
+struct Particle 
+{
+    HestonParameters position;
+    HestonParameters velocity;
+    double loss;
+}
 
 // ------------------------------------------------------------------------------------ //
 /* FFT solver object */
@@ -59,8 +109,10 @@ class Heston_FFT
         double price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
         double iv_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
 
-        /* Calibration and optimization */
-            // TODO
+        /* Calibration with particle swarm */
+        HestonParameters calibrate_PSO(Kokkos::View<double*> call_prices, 
+                                                Kokkos::View<double*> K,
+                                                PSOConfig config);
 
 
     private:
@@ -95,11 +147,11 @@ KOKKOS_INLINE_FUNCTION Complex Heston_FFT::heston_characteristic(Complex u)
     // Safe guard the fraction within the exponential terms 
     Complex log_arg_frac = Kokkos::abs(1.0 - g_2) > EPSILON 
                             ? (1.0 - g_2*Kokkos::exp(-d*t)) / (1.0 - g_2) 
-                            : Complex(EPSILON, EPSILON);
+                            : Complex(EPSILON, 0.0);
 
     Complex last_term_frac = Kokkos::abs(1.0 - g_2*Kokkos::exp(-d*t)) > EPSILON
                             ? (1.0 - Kokkos::exp(-d*t)) / (1.0 - g_2*Kokkos::exp(-d*t))
-                            : Complex(EPSILON, EPSILON);
+                            : Complex(EPSILON, 0.0);
 
     // Exponent
     Complex exponent = i*u*(Kokkos::log(S_0) + r*t)
@@ -263,7 +315,7 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
             while (iter < max_iter) {
                 
                 // Compute the difference between current computed implied vol vs market price 
-                price_diff = call_prices(j) - _black_scholes(S, strikes(j), current_iv, t);
+                price_diff = _black_scholes(S, strikes(j), current_iv, t) - call_prices(j);
                 if (Kokkos::abs(price_diff) < epsilon) {break;}
 
                 // Vega computation
@@ -271,7 +323,7 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
                 if (vega < EPSILON) {vega = EPSILON;}
 
                 // Newton update to the volatility
-                current_iv += price_diff / vega;
+                current_iv -= price_diff / vega;
 
                 // Make sure we are moving along
                 iter++;
@@ -318,9 +370,7 @@ double Heston_FFT::price_vega_weighted_loss(Kokkos::View<double*> call_prices, K
 {
     // Capture variables
     unsigned int num_prices = call_prices.extent(0);
-    double S = S_0;
-    double tau = t;
-    
+
     // Computing calls and vegas based on strikes
     Kokkos::View<double*> heston_calls = this->call_prices(K);
     Kokkos::View<double*> vega = market_vega(call_prices, K);
@@ -340,8 +390,6 @@ double Heston_FFT::price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View
 {
     // Capture variables
     unsigned int num_prices = call_prices.extent(0);
-    double S = S_0;
-    double tau = t;
 
     // Computing calls based on strikes for squared loss
     Kokkos::View<double*> heston_calls = this->call_prices(K);
@@ -360,8 +408,6 @@ double Heston_FFT::iv_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<do
 {
     // Capture variables
     unsigned int num_prices = call_prices.extent(0);
-    double S = S_0;
-    double tau = t;
 
     // Computing calls based on strikes for squared loss
     Kokkos::View<double*> heston_calls = this->call_prices(K);
