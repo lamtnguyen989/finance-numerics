@@ -49,10 +49,10 @@ class Heston_FFT
         void update_parameters(HestonParameters updatedParams) { params = updatedParams;}
 
         /* Implied volatility methods */
-        Kokkos::View<double*> market_implied_volatility(Kokkos::View<double*> mkt_call_price, Kokkos::View<double*> K, unsigned int max_iter, double epsilon, bool print);
+        Kokkos::View<double*> implied_volatility(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, unsigned int max_iter, double epsilon, bool print);
 
         /* Calibration and optimization */
-            // TODO
+        HestonParameters iv_calibrate();
 
     private:
         /* Data fields */
@@ -239,9 +239,10 @@ Kokkos::View<double*> Heston_FFT::black_scholes_call(Kokkos::View<double*> strik
 }
 
 /* Computing Implied volatility from minimization routine of B-S prices */
-Kokkos::View<double*> Heston_FFT::market_implied_volatility(Kokkos::View<double*> mkt_call_price, Kokkos::View<double*> strikes, unsigned int max_iter=10, double epsilon=1e-10, bool print=false)
+Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_prices, Kokkos::View<double*> strikes, 
+                                                    unsigned int max_iter=10, double epsilon=1e-10, bool print=false)
 {
-    unsigned int num_options = mkt_call_price.extent(0);
+    unsigned int num_options = call_prices.extent(0);
     Kokkos::View<double*> implied_vols("implied_vols", num_options);
 
     // Capture variables
@@ -255,12 +256,12 @@ Kokkos::View<double*> Heston_FFT::market_implied_volatility(Kokkos::View<double*
             while (iter < max_iter) {
                 
                 // Compute the difference between current computed implied vol vs market price 
-                price_diff = mkt_call_price(j) - _black_scholes(S, strikes(j), current_iv, t);
+                price_diff = call_prices(j) - _black_scholes(S, strikes(j), current_iv, t);
                 if (Kokkos::abs(price_diff) < epsilon) {break;}
 
                 // Vega computation
                 double vega = _vega(S, strikes(j), current_iv, t);
-                if (vega < 5-15) {vega = 5e-15;}
+                if (vega < EPSILON) {vega = EPSILON;}
 
                 // Newton update to the volatility
                 current_iv += price_diff / vega;
@@ -273,11 +274,11 @@ Kokkos::View<double*> Heston_FFT::market_implied_volatility(Kokkos::View<double*
         });
     
     if (print) {
-        Kokkos::printf("Strike \t\t Market Call Price   Implied Vol \n");
+        Kokkos::printf("Strike \t\t Call Price   Implied Vol \n");
         Kokkos::printf("-----------------------\n");
         Kokkos::parallel_for("print_result", strikes.extent(0),
             KOKKOS_LAMBDA(unsigned int k){
-                Kokkos::printf("%.2lf \t\t %.2lf \t\t %.2lf\n", strikes(k), mkt_call_price(k), implied_vols(k));
+                Kokkos::printf("%.2lf \t\t %.2lf \t\t %.2lf\n", strikes(k), call_prices(k), implied_vols(k));
         });
         Kokkos::fence();
         Kokkos::printf("\n");
@@ -330,7 +331,8 @@ int main(int argc, char* argv[])
         // Implied vols
         double goal_vol = 0.13;
         Kokkos::View<double*> test_prices = solver.black_scholes_call(strikes, goal_vol, true);
-        Kokkos::View<double*> iv = solver.market_implied_volatility(test_prices, strikes, 10, 1e-6, true);
+        Kokkos::View<double*> iv = solver.implied_volatility(test_prices, strikes, 10, 1e-15, true);
+        Kokkos::View<double*> iv_Heston = solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
 
     }
     Kokkos::finalize();
