@@ -28,7 +28,9 @@ struct HestonParameters
         : v0(v_0) , kappa(kappa), theta(theta), rho(rho), sigma(sigma) {}
 
     // Empty constructor for manually setting values later
-    HestonParameters() {}
+    HestonParameters() 
+        : v0(EPSILON) , kappa(EPSILON), theta(EPSILON), rho(EPSILON), sigma(EPSILON) 
+        {}
 };
 
 // ------------------------------------------------------------------------------------ //
@@ -58,9 +60,9 @@ struct PSOConfig
         , n_particles(40), max_iter(100)
         , v0_min(0.001), v0_max(0.75)
         , kappa_min(0.1), kappa_max(16.0)
-        , theta_min(0.001), theta_max(0.5)
+        , theta_min(0.001), theta_max(10.0)
         , rho_min(-0.999), rho_max(0.999)
-        , sigma_min(0.01), sigma_max(1.1)
+        , sigma_min(0.01), sigma_max(4.0)
         {}
 };
 
@@ -71,7 +73,7 @@ struct Particle
     HestonParameters position;
     HestonParameters velocity;
     double loss;
-}
+};
 
 // ------------------------------------------------------------------------------------ //
 /* FFT solver object */
@@ -112,7 +114,8 @@ class Heston_FFT
         /* Calibration with particle swarm */
         HestonParameters calibrate_PSO(Kokkos::View<double*> call_prices, 
                                                 Kokkos::View<double*> K,
-                                                PSOConfig config);
+                                                PSOConfig config,
+                                                unsigned int seed);
 
 
     private:
@@ -132,7 +135,49 @@ class Heston_FFT
         KOKKOS_INLINE_FUNCTION double std_normal_dist(double x) {return 0.39894228040143268 * Kokkos::exp(-0.5*x*x);}
         KOKKOS_INLINE_FUNCTION double _black_scholes(double S, double K, double sigma, double tau);
         KOKKOS_INLINE_FUNCTION double _vega(double S, double K, double sigma, double tau);
+
+        /* Particle swarm */
 };
+
+HestonParameters Heston_FFT::calibrate_PSO(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, PSOConfig config, unsigned int seed=12345)
+{
+    // Metadata
+    unsigned int n_particles = config.n_particles;
+    Kokkos::Random_XorShift64_Pool<> rand_pool(seed);
+
+    // Initializing paticles
+    Kokkos::View<Particle*> particles("particles", n_particles);
+    Kokkos::parallel_for("initializing_particles", n_particles,
+        KOKKOS_LAMBDA(unsigned int k) {
+            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+            // TODO: Initalize position for particles (note velocity is already set to close to 0)
+
+            // Huge initial loss 
+            particles(k).loss = 1e5;
+
+            rand_pool.free_state(generator);
+        });
+
+    // Update the particles through all the iterations
+    double best_global_loss = 1e5;
+    HestonParameters best_param;
+
+    for (unsigned int iter = 0; iter < config.max_iter; iter++) {
+        Kokkos::parallel_for("update_particles", n_particles, 
+            KOKKOS_LAMBDA(unsigned int k) {
+                Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+                // TODO
+
+                rand_pool.free_state(generator);
+            });
+    }
+
+    return best_param;
+}
+
+
 
 /* Heston Characteristic functions */
 KOKKOS_INLINE_FUNCTION Complex Heston_FFT::heston_characteristic(Complex u)
@@ -470,7 +515,6 @@ int main(int argc, char* argv[])
         Kokkos::View<double*> test_prices = solver.black_scholes_call(strikes, goal_vol, true);
         Kokkos::View<double*> iv = solver.implied_volatility(test_prices, strikes, 10, 1e-15, true);
         Kokkos::View<double*> iv_Heston = solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
-
 
 
     }
