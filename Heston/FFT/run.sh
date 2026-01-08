@@ -16,11 +16,10 @@ rm -f run.log
 BUILD_DIR=build/
 cmake   -B $BUILD_DIR \
         -DCMAKE_BUILD_TYPE=Release \
-        -DKOKKOS_ENABLE_COMPILE_AS_CMAKE_LANGUAGE \
         -DKokkos_ENABLE_CUDA_RELOCATABLE_DEVICE_CODE=ON \
 
 # Compile and run executable
-make -C $BUILD_DIR VERBOSE=1 -j$(nproc)
+make -C $BUILD_DIR -j$(nproc)
 $BUILD_DIR/hestonFFT > run.log
 
 # Result 

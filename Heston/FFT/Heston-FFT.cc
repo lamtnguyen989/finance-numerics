@@ -1,6 +1,7 @@
 #include <Kokkos_Core.hpp>
 #include <Kokkos_Complex.hpp>
 #include <KokkosFFT.hpp>
+//#include <unistd.h>
 
 /* Macros */
 using Complex = Kokkos::complex<double>;
@@ -8,6 +9,7 @@ using exec_space = Kokkos::DefaultExecutionSpace;
 #define PI 3.141592653589793
 #define EPSILON 5e-15
 #define i Complex(0.0, 1.0) // It has to be defined like this due to device code conflict
+#define square(x) (x*x)
 
 
 // ------------------------------------------------------------------------------------ //
@@ -42,16 +44,24 @@ class Heston_FFT
         /* Pricing methods */
         Kokkos::View<double*> call_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print);
         Kokkos::View<double*> put_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print);
+        Kokkos::View<double*> black_scholes_call(Kokkos::View<double*> strikes, double sigma, bool print);
 
         /* Modify model methods */
         void update_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
         void update_parameters(HestonParameters updatedParams) { params = updatedParams;}
 
-        /* Implied volatility methods */
-        double implied_volatility(double S);
+        /* Implied volatility */
+        Kokkos::View<double*> implied_volatility(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, unsigned int max_iter, double epsilon, bool print);
+        Kokkos::View<double*> market_vega(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, unsigned int max_iter, double epsilon, bool print);
+
+        /* Loss functions for calibration */
+        double price_vega_weighted_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
+        double price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
+        double iv_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
 
         /* Calibration and optimization */
             // TODO
+
 
     private:
         /* Data fields */
@@ -66,8 +76,8 @@ class Heston_FFT
         KOKKOS_INLINE_FUNCTION Complex damped_call(Complex v);
 
         /* Black-Scholes formula related stuff for implied volatility */
-        KOKKOS_INLINE_FUNCTION double std_normal_cdf(double x);
-        KOKKOS_INLINE_FUNCTION double std_normal_dist(double x) {return 0.39894228040143268 * Kokkos::exp(0.5*x*x);}
+        KOKKOS_INLINE_FUNCTION double std_normal_cdf(double x) {return 0.5 * (1 + Kokkos::erf(x * 0.70710678118654752));}
+        KOKKOS_INLINE_FUNCTION double std_normal_dist(double x) {return 0.39894228040143268 * Kokkos::exp(-0.5*x*x);}
         KOKKOS_INLINE_FUNCTION double _black_scholes(double S, double K, double sigma, double tau);
         KOKKOS_INLINE_FUNCTION double _vega(double S, double K, double sigma, double tau);
 };
@@ -77,7 +87,7 @@ KOKKOS_INLINE_FUNCTION Complex Heston_FFT::heston_characteristic(Complex u)
 {
     // A bunch of repeated constants in the calculation
     Complex xi = params.kappa - i*params.rho*params.sigma*u;
-    Complex d = Kokkos::sqrt(xi*xi + params.sigma*params.sigma*(u*u + i*u));
+    Complex d = Kokkos::sqrt(square(xi) + square(params.sigma)*(square(u) + i*u));
     if (Kokkos::real(d) < 0.0) { d = -d;}
     //Complex g_1 = (xi + d) / (xi - d);
     Complex g_2 = (xi - d) / (xi + d);
@@ -93,8 +103,8 @@ KOKKOS_INLINE_FUNCTION Complex Heston_FFT::heston_characteristic(Complex u)
 
     // Exponent
     Complex exponent = i*u*(Kokkos::log(S_0) + r*t)
-                    + (params.kappa*params.theta)/(params.sigma*params.sigma) * ((xi -d)*t - 2.0*Kokkos::log(log_arg_frac))
-                    + (params.v0/(params.sigma*params.sigma))*(xi-d)*(last_term_frac);
+                    + (params.kappa*params.theta)/square(params.sigma) * ((xi -d)*t - 2.0*Kokkos::log(log_arg_frac))
+                    + (params.v0/square(params.sigma))*(xi-d)*(last_term_frac);
 
     return Kokkos::exp(exponent);
 }
@@ -109,7 +119,7 @@ KOKKOS_INLINE_FUNCTION Complex Heston_FFT::damped_call(Complex v)
 
 
 /* Call price computation */
-Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print=false)
+Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, unsigned int grid_points=8192, bool print=false)
 {
     // FFT setup
     double eta = 0.2;   // Step-size in damped Fourier space
@@ -170,10 +180,8 @@ Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, uns
     return prices;
 }
 
-
-
 /* Put price computation from duality */
-Kokkos::View<double*> Heston_FFT::put_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print=false)
+Kokkos::View<double*> Heston_FFT::put_prices(Kokkos::View<double*> strikes, unsigned int grid_points=8192, bool print=false)
 {
     // Compute call prices 
     Kokkos::View<double*> prices = call_prices(strikes, grid_points, false);
@@ -199,25 +207,175 @@ Kokkos::View<double*> Heston_FFT::put_prices(Kokkos::View<double*> strikes, unsi
     return prices;
 }
 
-/* Implementing the stadard normal cdf derived from the error function erf() */
-KOKKOS_INLINE_FUNCTION double Heston_FFT::std_normal_cdf(double x)
-{
-    return 0.5 * (1 + Kokkos::erf(x * 0.70710678118654752));
-    // The number 0.7071... is just 1/sqrt(2)
-}
-
-/* Black-Scholes formula (note that tau is the time to expiration) */
+/* Black-Scholes related stuff (note that tau is the time to expiration) */
 KOKKOS_INLINE_FUNCTION double Heston_FFT::_black_scholes(double S, double K, double sigma, double tau)
 {
-    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*sigma*sigma)) / (sigma * Kokkos::sqrt(tau));
+    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*square(sigma))) / (sigma * Kokkos::sqrt(tau));
     double d_minus = d_plus - sigma*Kokkos::sqrt(tau);
     return S*std_normal_cdf(d_plus) - std_normal_cdf(d_minus)*(K*Kokkos::exp(-r*tau));
 }
 
 KOKKOS_INLINE_FUNCTION double Heston_FFT::_vega(double S, double K, double sigma, double tau)
 {
-    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*sigma*sigma)) / (sigma * Kokkos::sqrt(tau));
+    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*square(sigma))) / (sigma * Kokkos::sqrt(tau));
     return S*std_normal_dist(d_plus)*Kokkos::sqrt(tau);
+}
+
+Kokkos::View<double*> Heston_FFT::black_scholes_call(Kokkos::View<double*> strikes, double sigma, bool print=false)
+{
+    Kokkos::View<double*> calls("BS", strikes.extent(0));
+    double S = S_0;
+
+    Kokkos::parallel_for("b-s_calls", strikes.extent(0),
+        KOKKOS_LAMBDA(unsigned int k){
+            calls(k) = _black_scholes(S, strikes(k), sigma, t);
+        });
+
+    if (print) {
+        Kokkos::printf("Strike \t\t BS Call Price\n");
+        Kokkos::printf("-----------------------\n");
+        Kokkos::parallel_for("print_result", strikes.extent(0),
+            KOKKOS_LAMBDA(unsigned int k){
+                Kokkos::printf("%.2lf \t\t %.2lf\n", strikes(k), calls(k));
+        });
+        Kokkos::fence();
+        Kokkos::printf("\n");
+    }
+
+    return calls;
+}
+
+/* Computing Implied volatility from minimization routine of B-S prices */
+Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_prices, Kokkos::View<double*> strikes, 
+                                                    unsigned int max_iter=10, double epsilon=1e-10, bool print=false)
+{
+    unsigned int num_options = call_prices.extent(0);
+    Kokkos::View<double*> implied_vols("implied_vols", num_options);
+
+    // Capture variables
+    double S = S_0;
+
+    Kokkos::parallel_for("compute_iv", num_options, 
+        KOKKOS_LAMBDA(unsigned int j) {
+            unsigned int iter = 0;
+            double price_diff = 1e5;
+            double current_iv = 0.1;
+            while (iter < max_iter) {
+                
+                // Compute the difference between current computed implied vol vs market price 
+                price_diff = call_prices(j) - _black_scholes(S, strikes(j), current_iv, t);
+                if (Kokkos::abs(price_diff) < epsilon) {break;}
+
+                // Vega computation
+                double vega = _vega(S, strikes(j), current_iv, t);
+                if (vega < EPSILON) {vega = EPSILON;}
+
+                // Newton update to the volatility
+                current_iv += price_diff / vega;
+
+                // Make sure we are moving along
+                iter++;
+            }
+
+            implied_vols(j) = current_iv;
+        });
+    
+    if (print) {
+        Kokkos::printf("Strike \t\t Call Price   Implied Vol \n");
+        Kokkos::printf("-----------------------\n");
+        Kokkos::parallel_for("print_result", strikes.extent(0),
+            KOKKOS_LAMBDA(unsigned int k){
+                Kokkos::printf("%.2lf \t\t %.2lf \t\t %.2lf\n", strikes(k), call_prices(k), implied_vols(k));
+        });
+        Kokkos::fence();
+        Kokkos::printf("\n");
+    }
+
+    return implied_vols;
+}
+
+Kokkos::View<double*> Heston_FFT::market_vega(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, 
+                                            unsigned int max_iter=10, double epsilon=1e-10, bool print=false)
+{
+    // Capturing variables
+    double S = S_0;
+    double tau = t;
+    unsigned int num_prices = call_prices.extent(0);
+
+    // Note that we can compute vega from the implied vols and these calculations are independent
+    Kokkos::View<double*> iv = implied_volatility(call_prices, K, max_iter, epsilon, false);
+
+    Kokkos::View<double*> vega("market_vegas", num_prices);
+    Kokkos::parallel_for("compute_market_vega", num_prices,
+        KOKKOS_LAMBDA(unsigned int k) {
+            vega(k) = _vega(S, K(k), iv(k), tau);
+        });
+
+    return vega;
+}
+
+double Heston_FFT::price_vega_weighted_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K)
+{
+    // Capture variables
+    unsigned int num_prices = call_prices.extent(0);
+    double S = S_0;
+    double tau = t;
+    
+    // Computing calls and vegas based on strikes
+    Kokkos::View<double*> heston_calls = this->call_prices(K);
+    Kokkos::View<double*> vega = market_vega(call_prices, K);
+
+    // Reduce the vega-weighted loss
+    double loss;
+    Kokkos::parallel_reduce("weighted_vega_loss", num_prices,
+        KOKKOS_LAMBDA(unsigned int k, double& local_loss) {
+            double price_diff = call_prices(k) - heston_calls(k);
+            local_loss += square(price_diff) / square(vega(k));
+        }, loss);
+
+    return loss;
+}
+
+double Heston_FFT::price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K)
+{
+    // Capture variables
+    unsigned int num_prices = call_prices.extent(0);
+    double S = S_0;
+    double tau = t;
+
+    // Computing calls based on strikes for squared loss
+    Kokkos::View<double*> heston_calls = this->call_prices(K);
+
+    // Reduce squared loss
+    double loss;
+    Kokkos::parallel_reduce("squared_vega_loss", num_prices,
+        KOKKOS_LAMBDA(unsigned int k, double& local_loss) {
+            local_loss += square(call_prices(k) - heston_calls(k));
+        }, loss);
+
+    return loss;
+}
+
+double Heston_FFT::iv_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K)
+{
+    // Capture variables
+    unsigned int num_prices = call_prices.extent(0);
+    double S = S_0;
+    double tau = t;
+
+    // Computing calls based on strikes for squared loss
+    Kokkos::View<double*> heston_calls = this->call_prices(K);
+    Kokkos::View<double*> heston_iv = implied_volatility(heston_calls, K);
+    Kokkos::View<double*> market_iv = implied_volatility(call_prices, K);
+
+    // Reduce squared loss
+    double loss;
+    Kokkos::parallel_reduce("squared_vega_loss", num_prices,
+        KOKKOS_LAMBDA(unsigned int k, double& local_loss) {
+            local_loss += square(heston_iv(k) - market_iv(k));
+        }, loss);
+
+    return loss;
 }
 
 // ------------------------------------------------------------------------------------ //
@@ -231,7 +389,7 @@ int main(int argc, char* argv[])
     Kokkos::initialize(argc, argv);
     {
         // Pricing parameters
-        double r = 0.01;
+        double r = 0.03;
         double S_0 = 100.0;
         double T = 1.0;
         unsigned int num_strikes = 10;
@@ -259,6 +417,16 @@ int main(int argc, char* argv[])
         Heston_FFT solver(S_0, r, T, hestonParams, alpha);
         Kokkos::View<double*> call_prices = solver.call_prices(strikes, N, true);
         Kokkos::View<double*> put_prices = solver.put_prices(strikes, N, true);
+
+
+        // Implied vols
+        double goal_vol = 0.13;
+        Kokkos::View<double*> test_prices = solver.black_scholes_call(strikes, goal_vol, true);
+        Kokkos::View<double*> iv = solver.implied_volatility(test_prices, strikes, 10, 1e-15, true);
+        Kokkos::View<double*> iv_Heston = solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
+
+
+
     }
     Kokkos::finalize();
 
