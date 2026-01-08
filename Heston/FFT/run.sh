@@ -19,7 +19,7 @@ cmake   -B $BUILD_DIR \
         -DKokkos_ENABLE_CUDA_RELOCATABLE_DEVICE_CODE=ON \
 
 # Compile and run executable
-make -C $BUILD_DIR VERBOSE=1 -j$(nproc)
+make -C $BUILD_DIR -j$(nproc)
 $BUILD_DIR/hestonFFT > run.log
 
 # Result 
