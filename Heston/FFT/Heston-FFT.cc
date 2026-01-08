@@ -45,10 +45,10 @@ class Heston_FFT
 
         /* Modify model methods */
         void update_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
-        void update_parameters(HestonParameters updatedParams) {params = updatedParams;}
+        void update_parameters(HestonParameters updatedParams) { params = updatedParams;}
 
         /* Implied volatility methods */
-            // TODO
+        double implied_volatility(double S);
 
         /* Calibration and optimization */
             // TODO
@@ -65,10 +65,11 @@ class Heston_FFT
         KOKKOS_INLINE_FUNCTION Complex heston_characteristic(Complex u);
         KOKKOS_INLINE_FUNCTION Complex damped_call(Complex v);
 
-        /* Black-Scholes formula for implied volatility */
+        /* Black-Scholes formula related stuff for implied volatility */
         KOKKOS_INLINE_FUNCTION double std_normal_cdf(double x);
+        KOKKOS_INLINE_FUNCTION double std_normal_dist(double x) {return 0.39894228040143268 * Kokkos::exp(0.5*x*x);}
         KOKKOS_INLINE_FUNCTION double _black_scholes(double S, double K, double sigma, double tau);
-
+        KOKKOS_INLINE_FUNCTION double _vega(double S, double K, double sigma, double tau);
 };
 
 /* Heston Characteristic functions */
@@ -211,6 +212,12 @@ KOKKOS_INLINE_FUNCTION double Heston_FFT::_black_scholes(double S, double K, dou
     double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*sigma*sigma)) / (sigma * Kokkos::sqrt(tau));
     double d_minus = d_plus - sigma*Kokkos::sqrt(tau);
     return S*std_normal_cdf(d_plus) - std_normal_cdf(d_minus)*(K*Kokkos::exp(-r*tau));
+}
+
+KOKKOS_INLINE_FUNCTION double Heston_FFT::_vega(double S, double K, double sigma, double tau)
+{
+    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*sigma*sigma)) / (sigma * Kokkos::sqrt(tau));
+    return S*std_normal_dist(d_plus)*Kokkos::sqrt(tau);
 }
 
 // ------------------------------------------------------------------------------------ //
