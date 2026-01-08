@@ -16,6 +16,7 @@ rm -f run.log
 BUILD_DIR=build/
 cmake   -B $BUILD_DIR \
         -DCMAKE_BUILD_TYPE=Release \
+        -DKOKKOS_ENABLE_COMPILE_AS_CMAKE_LANGUAGE \
         -DKokkos_ENABLE_CUDA_RELOCATABLE_DEVICE_CODE=ON \
 
 # Compile and run executable

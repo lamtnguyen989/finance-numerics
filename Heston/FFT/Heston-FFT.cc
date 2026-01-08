@@ -44,7 +44,8 @@ class Heston_FFT
         Kokkos::View<double*> put_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print);
 
         /* Modify model methods */
-        void modify_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
+        void update_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
+        void update_parameters(HestonParameters updatedParams) {params = updatedParams;}
 
         /* Implied volatility methods */
             // TODO
@@ -54,15 +55,20 @@ class Heston_FFT
 
     private:
         /* Data fields */
-        double S_0;
-        double r;
-        double t;
-        HestonParameters params;
-        double alpha;
+        double S_0;                 // Initial price
+        double r;                   // Risk-free rate
+        double t;                   // Expiration time (In hindsight, it should be named T)
+        HestonParameters params;    // Parameters
+        double alpha;               // Dampening factor within FFT
 
         /* Kokkos functions */
         KOKKOS_INLINE_FUNCTION Complex heston_characteristic(Complex u);
         KOKKOS_INLINE_FUNCTION Complex damped_call(Complex v);
+
+        /* Black-Scholes formula for implied volatility */
+        KOKKOS_INLINE_FUNCTION double std_normal_cdf(double x);
+        KOKKOS_INLINE_FUNCTION double _black_scholes(double S, double K, double sigma, double tau);
+
 };
 
 /* Heston Characteristic functions */
@@ -190,6 +196,21 @@ Kokkos::View<double*> Heston_FFT::put_prices(Kokkos::View<double*> strikes, unsi
     }
 
     return prices;
+}
+
+/* Implementing the stadard normal cdf derived from the error function erf() */
+KOKKOS_INLINE_FUNCTION double Heston_FFT::std_normal_cdf(double x)
+{
+    return 0.5 * (1 + Kokkos::erf(x * 0.70710678118654752));
+    // The number 0.7071... is just 1/sqrt(2)
+}
+
+/* Black-Scholes formula (note that tau is the time to expiration) */
+KOKKOS_INLINE_FUNCTION double Heston_FFT::_black_scholes(double S, double K, double sigma, double tau)
+{
+    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*sigma*sigma)) / (sigma * Kokkos::sqrt(tau));
+    double d_minus = d_plus - sigma*Kokkos::sqrt(tau);
+    return S*std_normal_cdf(d_plus) - std_normal_cdf(d_minus)*(K*Kokkos::exp(-r*tau));
 }
 
 // ------------------------------------------------------------------------------------ //
