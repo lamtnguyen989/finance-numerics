@@ -8,7 +8,7 @@ find_package(Kokkos REQUIRED)
 add_subdirectory(tpls/kokkos-fft)
 
 # Sources
-set(SRC_DIR "../src/")
+set(SRC_DIR ".")
 set(SRC_FILE ${SRC_DIR}/Heston-FFT.cc)
 
 # Executables
