@@ -1,0 +1,6 @@
+1. Option valuation using the fast Fourier transform (Carr-Madan): https://engineering.nyu.edu/sites/default/files/2018-08/CarrMadan2_0.pdf 
+2. Full and fast calibration of the Heston stochastic volatility model (Cui, et al): https://arxiv.org/pdf/1511.08718
+3. Euler and Milstein Discretization (Fabrice Douglas Rouah): http://www.frouah.com/finance%20notes/Euler%20and%20Milstein%20Discretization.pdf
+4. https://quant.stackexchange.com/questions/7761/a-simple-formula-for-calculating-implied-volatility 
+5. The particle swarm - explosion, stability, and convergence in a multidimensional complex space https://ieeexplore.ieee.org/document/985692 
+6. https://machinelearningmastery.com/a-gentle-introduction-to-particle-swarm-optimization/ 
