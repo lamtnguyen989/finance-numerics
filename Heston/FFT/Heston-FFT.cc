@@ -210,7 +210,9 @@ HestonParameters Heston_FFT::calibrate_PSO(Kokkos::View<double*> call_prices, Ko
                 double r1_theta, r2_theta = generator.drand(0.0, 1.0);
                 double r1_rho, r2_rho = generator.drand(0.0, 1.0);
 
-                // 
+                // Coordinate-wise update the particle states
+                particles(k).velocity.v0 = config.w * particles(k).velocity.v0
+                                        + config.c_1 * r1_v0 * (particles(k).best_position.v0 - particles(k).position.v0);
 
                 // Release random state
                 rand_pool.free_state(generator);
