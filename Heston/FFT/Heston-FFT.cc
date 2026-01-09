@@ -73,6 +73,8 @@ struct Particle
     HestonParameters position;
     HestonParameters velocity;
     double loss;
+    double best_loss;
+
 };
 
 // ------------------------------------------------------------------------------------ //
@@ -149,27 +151,53 @@ HestonParameters Heston_FFT::calibrate_PSO(Kokkos::View<double*> call_prices, Ko
     Kokkos::View<Particle*> particles("particles", n_particles);
     Kokkos::parallel_for("initializing_particles", n_particles,
         KOKKOS_LAMBDA(unsigned int k) {
+
+            // Grab the random state
             Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
 
-            // TODO: Initalize position for particles (note velocity is already set to close to 0)
+            // Initalize position for particles (note velocity is already set to close to 0)
+            particles(k).position.v0 = config.v0_min + generator.drand(0.0, 1.0) * (config.v0_max - config.v0_min);
+            particles(k).position.kappa = config.kappa_min + generator.drand(0.0, 1.0) * (config.kappa_max - config.kappa_min);
+            particles(k).position.theta = config.theta_min + generator.drand(0.0, 1.0) * (config.theta_max - config.theta_min);
+            particles(k).position.rho = config.rho_min + generator.drand(0.0, 1.0) * (config.rho_max - config.rho_min);
+            particles(k).position.sigma = config.sigma_min + generator.drand(0.0, 1.0) * (config.sigma_max - config.sigma_min);
 
             // Huge initial loss 
             particles(k).loss = 1e5;
+            particles(k).best_loss = 1e5;
 
+            // Release random state
             rand_pool.free_state(generator);
         });
 
-    // Update the particles through all the iterations
+    // Swarming
     double best_global_loss = 1e5;
     HestonParameters best_param;
 
     for (unsigned int iter = 0; iter < config.max_iter; iter++) {
+
+        // Evaluate
+        Kokkos::parallel_for("evaluate_particles", n_particles, 
+            KOKKOS_LAMBDA(unsigned int k) {
+
+            });
+        Kokkos::fence();
+
+        // Update 
         Kokkos::parallel_for("update_particles", n_particles, 
             KOKKOS_LAMBDA(unsigned int k) {
+                
+                // Grab the random state
                 Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
 
-                // TODO
+                // Generate parameters for state updates
+                double r1_v0, r2_v0 = generator.drand(0.0, 1.0);
+                double r1_kappa, r2_kappa = generator.drand(0.0, 1.0);
+                double r1_sigma, r2_sigma = generator.drand(0.0, 1.0);
+                double r1_theta, r2_theta = generator.drand(0.0, 1.0);
+                double r1_rho, r2_rho = generator.drand(0.0, 1.0);
 
+                // Release random state
                 rand_pool.free_state(generator);
             });
     }
@@ -382,7 +410,7 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
         Kokkos::printf("-----------------------\n");
         Kokkos::parallel_for("print_result", strikes.extent(0),
             KOKKOS_LAMBDA(unsigned int k){
-                Kokkos::printf("%.2lf \t\t %.2lf \t\t %.2lf\n", strikes(k), call_prices(k), implied_vols(k));
+                Kokkos::printf("%.2lf \t\t %.2lf \t\t %.6lf\n", strikes(k), call_prices(k), implied_vols(k));
         });
         Kokkos::fence();
         Kokkos::printf("\n");
@@ -511,7 +539,7 @@ int main(int argc, char* argv[])
 
 
         // Implied vols
-        double goal_vol = 0.13;
+        double goal_vol = 0.13431432;
         Kokkos::View<double*> test_prices = solver.black_scholes_call(strikes, goal_vol, true);
         Kokkos::View<double*> iv = solver.implied_volatility(test_prices, strikes, 10, 1e-15, true);
         Kokkos::View<double*> iv_Heston = solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
