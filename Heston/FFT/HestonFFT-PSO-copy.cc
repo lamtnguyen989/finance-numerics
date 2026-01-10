@@ -1,5 +1,6 @@
 #include <Kokkos_Core.hpp>
 #include <Kokkos_Complex.hpp>
+#include <Kokkos_Random.hpp>
 #include <KokkosFFT.hpp>
 //#include <unistd.h>
 
@@ -17,18 +18,75 @@ using exec_space = Kokkos::DefaultExecutionSpace;
 /* Heston model parameters */
 struct HestonParameters
 {
-    double v0;       // Initial variance
-    double kappa;    // Mean-reversing variance process factor
-    double theta;    // Long-term variance
-    double rho;      // Correlation
-    double sigma;    // Vol of vol
+    public:
+        double v0;       // Initial variance
+        double kappa;    // Mean-reversing variance process factor
+        double theta;    // Long-term variance
+        double rho;      // Correlation
+        double sigma;    // Vol of vol
+
+        // Paramterized constructor
+        KOKKOS_INLINE_FUNCTION HestonParameters(double v_0, double kappa, double theta, double rho, double sigma)
+            : v0(v_0) , kappa(kappa), theta(theta), rho(rho), sigma(sigma) {}
+
+        // Empty constructor for manually setting values later
+        KOKKOS_INLINE_FUNCTION HestonParameters() 
+            : v0(EPSILON) , kappa(EPSILON), theta(EPSILON), rho(0.0), sigma(EPSILON) 
+            {}
 };
 
 // ------------------------------------------------------------------------------------ //
-/* Differential Evolution */
-struct Diff_EV_config
+/* Particle swarm config */
+struct PSOConfig
 {
+    /* PSO parameters */
+    double w;
+    double c_1;
+    double c_2;
+    double tolerance;
+    unsigned int n_particles;
+    unsigned int max_iter;
 
+    /* Parameters bounds */
+    double v0_min, v0_max;
+    double kappa_min, kappa_max;
+    double theta_min, theta_max;
+    double rho_min, rho_max;
+    double sigma_min, sigma_max;
+
+
+    PSOConfig()
+        : w(0.729843788128) 
+        , c_1(1.49617976566), c_2(1.49617976566) 
+        , tolerance(1e-8) 
+        , n_particles(100), max_iter(200)
+        , v0_min(0.001), v0_max(0.75)
+        , kappa_min(0.1), kappa_max(16.0)
+        , theta_min(0.001), theta_max(10.0)
+        , rho_min(-0.999), rho_max(0.999)
+        , sigma_min(0.01), sigma_max(4.0)
+        {}
+};
+
+// ------------------------------------------------------------------------------------ //
+/* Particle */
+struct Particle 
+{
+    HestonParameters position;
+    HestonParameters velocity;
+    HestonParameters best_position;
+    double loss;
+    double best_loss;
+
+    KOKKOS_INLINE_FUNCTION Particle() 
+        : position(), velocity(), best_position(), 
+          loss(HUGE), best_loss(HUGE) 
+        {}
+
+    KOKKOS_INLINE_FUNCTION Particle(HestonParameters init_pos, HestonParameters init_vel=HestonParameters(), double init_loss=HUGE)
+        : position(init_pos) , velocity(init_vel) , best_position(init_pos) ,
+        loss(init_loss) , best_loss(init_loss)
+        {}
 };
 
 // ------------------------------------------------------------------------------------ //
@@ -55,8 +113,11 @@ class Heston_FFT
         Kokkos::View<double*> black_scholes_call(Kokkos::View<double*> strikes, double sigma, bool print);
 
         /* Modify model methods */
-        void update_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
-        void update_parameters(HestonParameters updatedParams) { params = updatedParams;}
+        KOKKOS_INLINE_FUNCTION void update_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
+        KOKKOS_INLINE_FUNCTION void update_parameters(HestonParameters updatedParams) { params = updatedParams;}
+
+        /* Getters */
+        KOKKOS_INLINE_FUNCTION HestonParameters get_params() {return this->params;}
 
         /* Implied volatility */
         Kokkos::View<double*> implied_volatility(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, unsigned int max_iter, double epsilon, bool print);
@@ -65,10 +126,13 @@ class Heston_FFT
         /* Loss functions for calibration */
         double price_vega_weighted_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
         double price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
-        double implied_vol_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
+        double iv_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
 
-        /* Calibration and optimization */
-            // TODO
+        /* Calibration with particle swarm */
+        HestonParameters calibrate_PSO(Kokkos::View<double*> call_prices, 
+                                                Kokkos::View<double*> K,
+                                                PSOConfig config,
+                                                unsigned int seed);
 
 
     private:
@@ -88,6 +152,8 @@ class Heston_FFT
         KOKKOS_INLINE_FUNCTION double std_normal_dist(double x) {return 0.39894228040143268 * Kokkos::exp(-0.5*x*x);}
         KOKKOS_INLINE_FUNCTION double _black_scholes(double S, double K, double sigma, double tau);
         KOKKOS_INLINE_FUNCTION double _vega(double S, double K, double sigma, double tau);
+
+        /* Particle swarm */
 };
 
 /* Heston Characteristic functions */
@@ -103,11 +169,11 @@ KOKKOS_INLINE_FUNCTION Complex Heston_FFT::heston_characteristic(Complex u)
     // Safe guard the fraction within the exponential terms 
     Complex log_arg_frac = Kokkos::abs(1.0 - g_2) > EPSILON 
                             ? (1.0 - g_2*Kokkos::exp(-d*t)) / (1.0 - g_2) 
-                            : Complex(EPSILON, EPSILON);
+                            : Complex(EPSILON, 0.0);
 
     Complex last_term_frac = Kokkos::abs(1.0 - g_2*Kokkos::exp(-d*t)) > EPSILON
                             ? (1.0 - Kokkos::exp(-d*t)) / (1.0 - g_2*Kokkos::exp(-d*t))
-                            : Complex(EPSILON, EPSILON);
+                            : Complex(EPSILON, 0.0);
 
     // Exponent
     Complex exponent = i*u*(Kokkos::log(S_0) + r*t)
@@ -265,13 +331,14 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
 
     Kokkos::parallel_for("compute_iv", num_options, 
         KOKKOS_LAMBDA(unsigned int j) {
-            unsigned int iter = 0;
-            double price_diff = HUGE;
-            double current_iv = 0.1;
-            while (iter < max_iter) {
+
+            double price_diff = HUGE;    // Essentially error term
+            double current_iv = 0.1;    // Initial iv guess
+
+            for (unsigned int iter = 0; iter < max_iter; iter++) {
                 
                 // Compute the difference between current computed implied vol vs market price 
-                price_diff = call_prices(j) - _black_scholes(S, strikes(j), current_iv, t);
+                price_diff = _black_scholes(S, strikes(j), current_iv, t) - call_prices(j);
                 if (Kokkos::abs(price_diff) < epsilon) {break;}
 
                 // Vega computation
@@ -279,10 +346,7 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
                 if (vega < EPSILON) {vega = EPSILON;}
 
                 // Newton update to the volatility
-                current_iv += price_diff / vega;
-
-                // Make sure we are moving along
-                iter++;
+                current_iv -= price_diff / vega;
             }
 
             implied_vols(j) = current_iv;
@@ -293,7 +357,7 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
         Kokkos::printf("-----------------------\n");
         Kokkos::parallel_for("print_result", strikes.extent(0),
             KOKKOS_LAMBDA(unsigned int k){
-                Kokkos::printf("%.2lf \t\t %.2lf \t\t %.2lf\n", strikes(k), call_prices(k), implied_vols(k));
+                Kokkos::printf("%.2lf \t\t %.2lf \t\t %.6lf\n", strikes(k), call_prices(k), implied_vols(k));
         });
         Kokkos::fence();
         Kokkos::printf("\n");
@@ -326,9 +390,7 @@ double Heston_FFT::price_vega_weighted_loss(Kokkos::View<double*> call_prices, K
 {
     // Capture variables
     unsigned int num_prices = call_prices.extent(0);
-    double S = S_0;
-    double tau = t;
-    
+
     // Computing calls and vegas based on strikes
     Kokkos::View<double*> heston_calls = this->call_prices(K);
     Kokkos::View<double*> vega = market_vega(call_prices, K);
@@ -348,8 +410,6 @@ double Heston_FFT::price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View
 {
     // Capture variables
     unsigned int num_prices = call_prices.extent(0);
-    double S = S_0;
-    double tau = t;
 
     // Computing calls based on strikes for squared loss
     Kokkos::View<double*> heston_calls = this->call_prices(K);
@@ -364,12 +424,10 @@ double Heston_FFT::price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View
     return loss;
 }
 
-double Heston_FFT::implied_vol_sq_los(Kokkos::View<double*> call_prices, Kokkos::View<double*> K)
+double Heston_FFT::iv_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K)
 {
     // Capture variables
     unsigned int num_prices = call_prices.extent(0);
-    double S = S_0;
-    double tau = t;
 
     // Computing calls based on strikes for squared loss
     Kokkos::View<double*> heston_calls = this->call_prices(K);
@@ -385,6 +443,137 @@ double Heston_FFT::implied_vol_sq_los(Kokkos::View<double*> call_prices, Kokkos:
 
     return loss;
 }
+
+HestonParameters Heston_FFT::calibrate_PSO(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, PSOConfig config, unsigned int seed=12345)
+{
+    // Metadata
+    double global_best_loss = HUGE;
+    Particle global_best_particle;
+/*
+    unsigned int n_particles = config.n_particles;
+    Kokkos::Random_XorShift64_Pool<> rand_pool(seed);
+
+    // Initializing paticles
+    Kokkos::View<Particle*> particles("particles", n_particles);
+    Kokkos::parallel_for("initializing_particles", n_particles,
+        KOKKOS_LAMBDA(unsigned int k) {
+
+            // Grab the random state
+            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+            // Initalize positions for particles
+            HestonParameters initial_position = HestonParameters(
+                                                config.v0_min + generator.drand(0.0, 1.0)*(config.v0_max - config.v0_min), 
+                                                config.kappa_min + generator.drand(0.0, 1.0)*(config.kappa_max - config.kappa_min), 
+                                                config.theta_min + generator.drand(0.0, 1.0)*(config.theta_max - config.theta_min),
+                                                config.rho_min + generator.drand(0.0, 1.0)*(config.rho_max - config.rho_min),
+                                                config.sigma_min + generator.drand(0.0, 1.0)*(config.sigma_max - config.sigma_min)
+                                            );
+
+            // Zero init velocity and HUGE loss (a.k.a default values)
+            particles(k) = Particle(initial_position);
+
+            // Release random state
+            rand_pool.free_state(generator);
+        });
+
+    // Swarming
+    for (unsigned int iter = 0; iter < config.max_iter; iter++) {
+
+        // Evaluate (right now it has to be done on host)
+        Kokkos::View<Particle*>::HostMirror h_particles = Kokkos::create_mirror_view(particles);
+        for (unsigned int k = 0; k < n_particles; k++) {
+
+            // Temporary update parameters to price
+            HestonParameters original = this->get_params();
+            this->update_parameters(h_particles(k).position);
+
+            // Calculate loss
+            double loss = this->price_sq_loss(call_prices, K);
+
+            // Restore params
+            this->update_parameters(original);
+
+            // Update (host-side) particle loss at this index
+            h_particles(k).loss = loss;
+            if (h_particles(k).best_loss > loss) {
+                h_particles(k).best_loss = loss;
+                h_particles(k).best_position = h_particles(k).position;
+            }
+
+            // Update global best if this loss is less then global loss
+            if (loss < global_best_loss) {
+                global_best_loss = loss;
+                global_best_particle.best_position = h_particles(k).best_position;
+            }
+        }
+        // Copy the view back to device to parallelize the update algorithm
+        Kokkos::deep_copy(particles, h_particles);
+
+        // Update 
+        Kokkos::parallel_for("update_particles", n_particles, 
+            KOKKOS_LAMBDA(unsigned int k) {
+                
+                // Grab the random state
+                Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+                // Coordinate-wise update the particle states (why C++ does not have a way to loop through all struct data fields grrrr...)
+                double r1_v0 = generator.drand(0.0, 1.0);
+                double r2_v0 = generator.drand(0.0, 1.0);
+                particles(k).velocity.v0 = config.w * particles(k).velocity.v0
+                                        + config.c_1 * r1_v0 * (particles(k).best_position.v0 - particles(k).position.v0)
+                                        + config.c_2 * r2_v0 * (global_best_particle.position.v0 - particles(k).position.v0);
+
+                double r1_kappa = generator.drand(0.0, 1.0);
+                double r2_kappa = generator.drand(0.0, 1.0);
+                particles(k).velocity.kappa = config.w * particles(k).velocity.kappa
+                                        + config.c_1 * r1_kappa * (particles(k).best_position.kappa - particles(k).position.kappa)
+                                        + config.c_2 * r2_kappa * (global_best_particle.position.kappa - particles(k).position.kappa);
+
+                double r1_theta = generator.drand(0.0, 1.0);
+                double r2_theta = generator.drand(0.0, 1.0);
+                particles(k).velocity.theta = config.w * particles(k).velocity.theta
+                                        + config.c_1 * r1_theta * (particles(k).best_position.theta - particles(k).position.theta)
+                                        + config.c_2 * r2_theta * (global_best_particle.position.theta - particles(k).position.theta);
+
+                double r1_rho = generator.drand(0.0, 1.0);
+                double r2_rho = generator.drand(0.0, 1.0);
+                particles(k).velocity.rho = config.w * particles(k).velocity.rho
+                                        + config.c_1 * r1_rho * (particles(k).best_position.rho - particles(k).position.rho)
+                                        + config.c_2 * r2_rho * (global_best_particle.position.rho - particles(k).position.rho);
+
+                double r1_sigma = generator.drand(0.0, 1.0);
+                double r2_sigma = generator.drand(0.0, 1.0);
+                particles(k).velocity.sigma = config.w * particles(k).velocity.sigma
+                                        + config.c_1 * r1_sigma * (particles(k).best_position.sigma - particles(k).position.sigma)
+                                        + config.c_2 * r2_sigma * (global_best_particle.position.sigma - particles(k).position.sigma);
+
+                // Release random state
+                rand_pool.free_state(generator);
+
+                // Update position while still enforce bounds
+                double v0_pos = particles(k).position.v0 + particles(k).velocity.v0;
+                particles(k).position.v0 = Kokkos::max(config.v0_min, Kokkos::min(config.v0_max, v0_pos));
+                
+                double kappa_pos = particles(k).position.kappa + particles(k).velocity.kappa;
+                particles(k).position.kappa = Kokkos::max(config.kappa_min, Kokkos::min(config.kappa_max, kappa_pos));
+
+                double theta_pos = particles(k).position.theta + particles(k).velocity.theta;
+                particles(k).position.theta = Kokkos::max(config.theta_min, Kokkos::min(config.theta_max, theta_pos));
+
+                double rho_pos = particles(k).position.rho + particles(k).velocity.rho;
+                particles(k).position.rho = Kokkos::max(config.rho_min, Kokkos::min(config.rho_max, rho_pos));
+
+                double sigma_pos = particles(k).position.sigma + particles(k).velocity.sigma;
+                particles(k).position.sigma = Kokkos::max(config.sigma_min, Kokkos::min(config.sigma_max, sigma_pos));
+
+            });
+        Kokkos::fence();
+    }
+*/
+    return global_best_particle.best_position;
+}
+
 
 // ------------------------------------------------------------------------------------ //
 int main(int argc, char* argv[])
@@ -428,13 +617,15 @@ int main(int argc, char* argv[])
 
 
         // Implied vols
-        double goal_vol = 0.13;
+        double goal_vol = 0.13431432;
         Kokkos::View<double*> test_prices = solver.black_scholes_call(strikes, goal_vol, true);
         Kokkos::View<double*> iv = solver.implied_volatility(test_prices, strikes, 10, 1e-15, true);
         Kokkos::View<double*> iv_Heston = solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
 
-
-
+        // Calibrate
+        //HestonParameters cal_param = solver.calibrate_PSO(test_prices, strikes, PSOConfig());
+        //solver.update_parameters(cal_param);
+        //Kokkos::View<double*> cal_heston_iv = solver.implied_volatility(solver.call_prices(strikes), strikes, 20, 1e-10, true);
     }
     Kokkos::finalize();
 
