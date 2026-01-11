@@ -1,5 +1,6 @@
 #include <Kokkos_Core.hpp>
 #include <Kokkos_Complex.hpp>
+#include <Kokkos_Random.hpp>
 #include <KokkosFFT.hpp>
 //#include <unistd.h>
 
@@ -25,10 +26,46 @@ struct HestonParameters
 };
 
 // ------------------------------------------------------------------------------------ //
-/* Differential Evolution */
+/* Parameter bound for calibrating */
+struct ParameterBounds 
+{
+    /* Parameters bounds */
+    double v0_min, v0_max;
+    double kappa_min, kappa_max;
+    double theta_min, theta_max;
+    double rho_min, rho_max;
+    double sigma_min, sigma_max;
+
+    /* Generation bounds (If I want to incorporate later) */
+
+    /* Hard-setting default bounds */
+    ParameterBounds()
+        : v0_min(0.01) , v0_max(0.1)
+        , kappa_min(0.5) , kappa_max(10.0)
+        , theta_min(0.05) , theta_max(0.8)
+        , rho_min(-0.999) , rho_max(0.999)
+        , sigma_min(0.05) , sigma_max(0.8)
+    {}
+};
+
+// ------------------------------------------------------------------------------------ //
+/* Differential Evolution configurations */
 struct Diff_EV_config
 {
+    unsigned int population_size;   // The total population size
+    double crossover_prob;          // Cross-over probability
+    double weight;                  // Differential weight
+    unsigned int n_gen;             // Max iteration
+    double tolerance;               // Conergence threshold
 
+    //Diff_EV_config(unsigned int NP, double CR, double w, unsigned int max_gen)
+    //    : population_size(NP) , crossover_prob(CR) , weight(w) , n_gen(max_gen)
+    //    {}
+
+    Diff_EV_config()    // Wikipedia suggested parameters for empty constructor
+        : population_size(50) , crossover_prob(0.9) , weight(0.8)
+        , n_gen(100) , tolerance(EPSILON)
+        {}
 };
 
 // ------------------------------------------------------------------------------------ //
@@ -68,7 +105,9 @@ class Heston_FFT
         double implied_vol_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
 
         /* Calibration and optimization */
-            // TODO
+        HestonParameters diff_EV_calibration(Kokkos::View<double*> prices, Kokkos::View<double*> K, 
+                                            ParameterBounds bounds, Diff_EV_config config,
+                                            unsigned int seed);
 
 
     private:
@@ -89,6 +128,15 @@ class Heston_FFT
         KOKKOS_INLINE_FUNCTION double _black_scholes(double S, double K, double sigma, double tau);
         KOKKOS_INLINE_FUNCTION double _vega(double S, double K, double sigma, double tau);
 };
+
+HestonParameters diff_EV_calibration(Kokkos::View<double*> prices, Kokkos::View<double*> K, 
+                                    ParameterBounds bounds=ParameterBounds(), Diff_EV_config config=Diff_EV_config(),
+                                    unsigned int seed=12345)
+{
+    Kokkos::Random_XorShift64_Pool<> rand_pool(seed);
+    // TODO
+    return HestonParameters();
+}
 
 /* Heston Characteristic functions */
 KOKKOS_INLINE_FUNCTION Complex Heston_FFT::heston_characteristic(Complex u)
@@ -268,7 +316,7 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
             unsigned int iter = 0;
             double price_diff = HUGE;
             double current_iv = 0.1;
-            while (iter < max_iter) {
+            for (unsigned int iter = 0; iter < max_iter; iter++) {
                 
                 // Compute the difference between current computed implied vol vs market price 
                 price_diff = call_prices(j) - _black_scholes(S, strikes(j), current_iv, t);
@@ -280,9 +328,6 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
 
                 // Newton update to the volatility
                 current_iv += price_diff / vega;
-
-                // Make sure we are moving along
-                iter++;
             }
 
             implied_vols(j) = current_iv;
@@ -364,7 +409,7 @@ double Heston_FFT::price_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View
     return loss;
 }
 
-double Heston_FFT::implied_vol_sq_los(Kokkos::View<double*> call_prices, Kokkos::View<double*> K)
+double Heston_FFT::implied_vol_sq_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K)
 {
     // Capture variables
     unsigned int num_prices = call_prices.extent(0);
