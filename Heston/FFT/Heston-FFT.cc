@@ -114,11 +114,11 @@ class Heston_FFT
 
     private:
         /* Data fields */
-        double S_0;                 // Initial price
-        double r;                   // Risk-free rate
-        double t;                   // Expiration time (In hindsight, it should be named T)
+        double S_0;                         // Initial price
+        double r;                           // Risk-free rate
+        double t;                           // Expiration time (In hindsight, it should be named T)
         mutable HestonParameters params;    // Parameters
-        double alpha;               // Dampening factor within FFT
+        double alpha;                       // Dampening factor within FFT
 
         /* FFT pricing helpers */
         KOKKOS_INLINE_FUNCTION Complex heston_characteristic(Complex u) const;
@@ -161,15 +161,62 @@ HestonParameters Heston_FFT::diff_EV_calibration(Kokkos::View<double*> call_pric
         });
     Kokkos::fence();
     
-    // Evaluate inital population performance
-    /*
-    Kokkos::parallel_for("init_population", population_size, 
+    // Evaluate inital population performance (serially due to `warning #20011-D`)
+    for (unsigned int k = 0; k < population_size; k++)
+    {
+        this->update_parameters(population(k));
+        this->price_sq_loss(call_prices, K);
+    }
+
+    // Mutation
+    Kokkos::parallel_for("mutation", population_size,
         KOKKOS_CLASS_LAMBDA(unsigned int k) {
 
-            this->update_parameters(population(k));
+            // Initialize random state
+            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+            // Pick 3 distinct random candidate indices (wasting compute cycles for now but just making sure the algorithm is correct)
+            int a, b, c;
+            do {a = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k);
+            do {b = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k || a == b);
+            do {c = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k || a == b || b == c);
+
+            // Random dimensionality index (5 Heston parameters)
+            unsigned int R = static_cast<unsigned int>(generator.drand() * 5);
+
+            // Mutation loop
+            HestonParameters potential;
+            for (unsigned int j = 0; j < 5; j++) {
+
+                // Random floating point to compare againt the crossover probablity
+                double r_j = generator.drand(0,1);
+
+                if (r_j < config.crossover_prob || j == R) {
+                    switch (j) {
+                        case 0: potential.v0 = population(a).v0 + config.weight*(population(b).v0 - population(c).v0); break;
+                        case 1: potential.kappa = population(a).kappa + config.weight*(population(b).kappa - population(c).kappa); break;
+                        case 2: potential.theta = population(a).theta + config.weight*(population(b).theta - population(c).theta); break;
+                        case 3: potential.rho = population(a).rho + config.weight*(population(b).rho - population(c).rho); break;
+                        case 4: potential.sigma = population(a).sigma + config.weight*(population(b).sigma - population(c).sigma); break;
+                    }
+                } else {
+                    switch (j) {
+                        case 0: potential.v0 = population(k).v0; break;
+                        case 1: potential.kappa = population(k).kappa; break;
+                        case 2: potential.theta = population(k).theta; break;
+                        case 3: potential.rho = population(k).rho; break;
+                        case 4: potential.sigma = population(k).sigma; break;
+                    }
+                }
+            }
+
+            // Compare current parameter with the candidate one
+            
+
+            // Free the random state 
+            rand_pool.free_state(generator);
         });
 
-    */
     // TODO
     return HestonParameters();
 }
