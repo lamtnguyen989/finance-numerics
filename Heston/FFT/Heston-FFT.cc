@@ -434,7 +434,7 @@ HestonParameters Heston_FFT::diff_EV_calibration(Kokkos::View<double*> call_pric
     Kokkos::View<double*> mutation_losses("calibration_losses", population_size);
     HestonParameters best_param;
     double lowest_loss = HUGE;
-/*
+
     // Initialize population
     Kokkos::parallel_for("init_population", population_size, 
         KOKKOS_CLASS_LAMBDA(unsigned int k) {
@@ -453,7 +453,7 @@ HestonParameters Heston_FFT::diff_EV_calibration(Kokkos::View<double*> call_pric
             rand_pool.free_state(generator);
         });
     Kokkos::fence();
-
+/*
     // Evaluate inital population performance (serially due to `warning #20011-D`)
     for (unsigned int k = 0; k < population_size; k++) {
         this->update_parameters(population(k));
