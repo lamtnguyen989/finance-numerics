@@ -132,96 +132,6 @@ class Heston_FFT
 };
 
 
-HestonParameters Heston_FFT::diff_EV_calibration(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, 
-                                    ParameterBounds bounds=ParameterBounds(), Diff_EV_config config=Diff_EV_config(),
-                                    unsigned int seed=12345)
-{
-    // Variables
-    unsigned int population_size = config.population_size; 
-    Kokkos::Random_XorShift64_Pool<> rand_pool(seed);
-    Kokkos::View<HestonParameters*> population("population", population_size);
-    Kokkos::View<double*> losses("calibration_losses", population_size);
-
-    // Initialize population
-    Kokkos::parallel_for("init_population", population_size, 
-        KOKKOS_CLASS_LAMBDA(unsigned int k) {
-
-            // Initialize random state
-            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
-
-            // Initialize population randomly
-            population(k).v0 = generator.drand()*(bounds.v0_max - bounds.v0_min);
-            population(k).kappa = generator.drand()*(bounds.kappa_max - bounds.kappa_min);
-            population(k).theta = generator.drand()*(bounds.theta_max - bounds.theta_min);
-            population(k).rho = generator.drand()*(bounds.rho_max - bounds.rho_min);
-            population(k).sigma = generator.drand()*(bounds.sigma_max - bounds.sigma_min);
-
-            // Free the random state 
-            rand_pool.free_state(generator);
-        });
-    Kokkos::fence();
-    
-    // Evaluate inital population performance (serially due to `warning #20011-D`)
-    for (unsigned int k = 0; k < population_size; k++)
-    {
-        this->update_parameters(population(k));
-        this->price_sq_loss(call_prices, K);
-    }
-
-    // Mutation
-    Kokkos::parallel_for("mutation", population_size,
-        KOKKOS_CLASS_LAMBDA(unsigned int k) {
-
-            // Initialize random state
-            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
-
-            // Pick 3 distinct random candidate indices (wasting compute cycles for now but just making sure the algorithm is correct)
-            int a, b, c;
-            do {a = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k);
-            do {b = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k || a == b);
-            do {c = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k || a == b || b == c);
-
-            // Random dimensionality index (5 Heston parameters)
-            unsigned int R = static_cast<unsigned int>(generator.drand() * 5);
-
-            // Mutation loop
-            HestonParameters potential;
-            for (unsigned int j = 0; j < 5; j++) {
-
-                // Random floating point to compare againt the crossover probablity
-                double r_j = generator.drand(0,1);
-
-                if (r_j < config.crossover_prob || j == R) {
-                    switch (j) {
-                        case 0: potential.v0 = population(a).v0 + config.weight*(population(b).v0 - population(c).v0); break;
-                        case 1: potential.kappa = population(a).kappa + config.weight*(population(b).kappa - population(c).kappa); break;
-                        case 2: potential.theta = population(a).theta + config.weight*(population(b).theta - population(c).theta); break;
-                        case 3: potential.rho = population(a).rho + config.weight*(population(b).rho - population(c).rho); break;
-                        case 4: potential.sigma = population(a).sigma + config.weight*(population(b).sigma - population(c).sigma); break;
-                    }
-                } else {
-                    switch (j) {
-                        case 0: potential.v0 = population(k).v0; break;
-                        case 1: potential.kappa = population(k).kappa; break;
-                        case 2: potential.theta = population(k).theta; break;
-                        case 3: potential.rho = population(k).rho; break;
-                        case 4: potential.sigma = population(k).sigma; break;
-                    }
-                }
-            }
-
-            // Compare current parameter with the candidate one
-            
-
-            // Free the random state 
-            rand_pool.free_state(generator);
-        });
-
-    // TODO
-    return HestonParameters();
-}
-
-
 /* Heston Characteristic functions */
 KOKKOS_INLINE_FUNCTION Complex Heston_FFT::heston_characteristic(Complex u) const
 {
@@ -511,6 +421,135 @@ double Heston_FFT::implied_vol_sq_loss(Kokkos::View<double*> call_prices, Kokkos
     return loss;
 }
 
+HestonParameters Heston_FFT::diff_EV_calibration(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, 
+                                    ParameterBounds bounds=ParameterBounds(), Diff_EV_config config=Diff_EV_config(),
+                                    unsigned int seed=12345)
+{
+    // Variables
+    unsigned int population_size = config.population_size; 
+    Kokkos::Random_XorShift64_Pool<> rand_pool(seed);
+    Kokkos::View<HestonParameters*> population("population", population_size);
+    Kokkos::View<HestonParameters*> mutations("mutations", population_size);
+    Kokkos::View<double*> population_losses("calibration_losses", population_size);
+    Kokkos::View<double*> mutation_losses("calibration_losses", population_size);
+    HestonParameters best_param;
+    double lowest_loss = HUGE;
+/*
+    // Initialize population
+    Kokkos::parallel_for("init_population", population_size, 
+        KOKKOS_CLASS_LAMBDA(unsigned int k) {
+
+            // Initialize random state
+            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+            // Initialize population randomly
+            population(k).v0 = generator.drand()*(bounds.v0_max - bounds.v0_min);
+            population(k).kappa = generator.drand()*(bounds.kappa_max - bounds.kappa_min);
+            population(k).theta = generator.drand()*(bounds.theta_max - bounds.theta_min);
+            population(k).rho = generator.drand()*(bounds.rho_max - bounds.rho_min);
+            population(k).sigma = generator.drand()*(bounds.sigma_max - bounds.sigma_min);
+
+            // Free the random state 
+            rand_pool.free_state(generator);
+        });
+    Kokkos::fence();
+
+    // Evaluate inital population performance (serially due to `warning #20011-D`)
+    for (unsigned int k = 0; k < population_size; k++) {
+        this->update_parameters(population(k));
+        population_losses(k) = this->price_sq_loss(call_prices, K);
+    }
+
+    // Differential Evolution loop
+    for (unsigned int gen = 0; gen < config.n_gen; gen++) {
+
+        // Mutation generation
+        Kokkos::parallel_for("mutation_generation", population_size,
+            KOKKOS_CLASS_LAMBDA(unsigned int k) {
+
+                // Initialize random state
+                Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+                // Pick 3 distinct random candidate indices (wasting compute cycles for now but just making sure the algorithm is correct)
+                int a, b, c;
+                do {a = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k);
+                do {b = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k || a == b);
+                do {c = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k || a == b || b == c);
+
+                // Random dimensionality index (within 5 Heston parameters)
+                unsigned int R = static_cast<unsigned int>(generator.drand() * 5);
+
+                // Mutation of each dimension (parameters)
+                for (unsigned int j = 0; j < 5; j++) {
+
+                    if (generator.drand(0,1) < config.crossover_prob || j == R) {
+                        switch (j) {
+                            case 0: mutations(k).v0 = Kokkos::clamp(population(a).v0 + config.weight*(population(b).v0 - population(c).v0), 
+                                                                    bounds.v0_min, 
+                                                                    bounds.v0_max); 
+                                break;
+                            case 1: mutations(k).kappa = Kokkos::clamp(population(a).kappa + config.weight*(population(b).kappa - population(c).kappa), 
+                                                                    bounds.kappa_min, 
+                                                                    bounds.kappa_max);
+                                break;
+                            case 2: mutations(k).theta = Kokkos::clamp(population(a).theta + config.weight*(population(b).theta - population(c).theta), 
+                                                                    bounds.theta_min, 
+                                                                    bounds.theta_max);
+                                break;
+                            case 3: mutations(k).rho = Kokkos::clamp(population(a).rho + config.weight*(population(b).rho - population(c).rho), 
+                                                                    bounds.rho_min, 
+                                                                    bounds.rho_max);
+                                break;
+                            case 4: mutations(k).sigma = Kokkos::clamp(population(a).sigma + config.weight*(population(b).sigma - population(c).sigma), 
+                                                                    bounds.sigma_min, 
+                                                                    bounds.sigma_max);
+                                break;
+                        }
+                    } else {
+                        switch (j) {
+                            case 0: mutations(k).v0 = population(k).v0; break;
+                            case 1: mutations(k).kappa = population(k).kappa; break;
+                            case 2: mutations(k).theta = population(k).theta; break;
+                            case 3: mutations(k).rho = population(k).rho; break;
+                            case 4: mutations(k).sigma = population(k).sigma; break;
+                        }
+                    }
+                }
+                
+                // Free the random state 
+                rand_pool.free_state(generator);
+            });
+            Kokkos::fence();
+        
+
+        // Update loop
+        for (unsigned int k = 0; k < population_size; k++) {
+
+            // Evaluate the mutations
+            this->update_parameters(mutations(k));
+            mutation_losses(k) = this->price_sq_loss(call_prices, K);
+
+            // update the population based on mutations performance
+            if (mutation_losses(k) < population_losses(k)) {
+                population(k) = mutations(k);
+                population_losses(k) = mutation_losses(k);
+            }
+        }
+
+        // Grab the best parameters
+        best_param = population(0);
+        lowest_loss = population_losses(0);
+        for (unsigned int k = 1; k < population_size; k++) {
+            if (lowest_loss < population_losses(k)) {
+                best_param = population(k);
+                lowest_loss = population_losses(k);
+            }
+        }
+    }
+*/
+    return best_param;
+}
+
 // ------------------------------------------------------------------------------------ //
 int main(int argc, char* argv[])
 {
@@ -559,7 +598,9 @@ int main(int argc, char* argv[])
         Kokkos::View<double*> iv_Heston = solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
 
 
-
+        HestonParameters cal_param = solver.diff_EV_calibration(test_prices, strikes);
+        solver.update_parameters(cal_param);
+        solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
     }
     Kokkos::finalize();
 
