@@ -40,7 +40,7 @@ struct ParameterBounds
 
     /* Hard-setting default bounds */
     ParameterBounds()
-        : v0_min(0.01) , v0_max(0.1)
+        : v0_min(0.01) , v0_max(0.05)
         , kappa_min(0.5) , kappa_max(10.0)
         , theta_min(0.05) , theta_max(0.8)
         , rho_min(-0.999) , rho_max(0.999)
@@ -58,9 +58,10 @@ struct Diff_EV_config
     unsigned int n_gen;             // Max iteration
     double tolerance;               // Conergence threshold
 
-    //Diff_EV_config(unsigned int NP, double CR, double w, unsigned int max_gen)
-    //    : population_size(NP) , crossover_prob(CR) , weight(w) , n_gen(max_gen)
-    //    {}
+    Diff_EV_config(unsigned int NP, double CR, double w, unsigned int max_gen, double tol)
+        : population_size(NP) , crossover_prob(CR) , weight(w) 
+        , n_gen(max_gen) , tolerance(tol)
+        {}
 
     Diff_EV_config()    // Wikipedia suggested parameters for empty constructor
         : population_size(50) , crossover_prob(0.9) , weight(0.8)
@@ -87,13 +88,13 @@ class Heston_FFT
         {}
 
         /* Pricing methods */
-        Kokkos::View<double*> call_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print);
-        Kokkos::View<double*> put_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print);
+        Kokkos::View<double*> call_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print) const;
+        Kokkos::View<double*> put_prices(Kokkos::View<double*> strikes, unsigned int grid_points, bool print) const;
         Kokkos::View<double*> black_scholes_call(Kokkos::View<double*> strikes, double sigma, bool print);
 
         /* Modify model methods */
         KOKKOS_INLINE_FUNCTION void update_option_condition(double updated_S0, double updated_r, double updated_T) { S_0 = updated_S0; r = updated_r;  t = updated_T;}
-        KOKKOS_INLINE_FUNCTION void update_parameters(HestonParameters updatedParams) { params = updatedParams;}
+        KOKKOS_INLINE_FUNCTION void update_parameters(HestonParameters updatedParams) const { params = updatedParams;}
         KOKKOS_INLINE_FUNCTION HestonParameters get_params() {return params;}
 
         /* Implied volatility */
@@ -113,72 +114,22 @@ class Heston_FFT
 
     private:
         /* Data fields */
-        double S_0;                 // Initial price
-        double r;                   // Risk-free rate
-        double t;                   // Expiration time (In hindsight, it should be named T)
-        HestonParameters params;    // Parameters
-        double alpha;               // Dampening factor within FFT
+        double S_0;                         // Initial price
+        double r;                           // Risk-free rate
+        double t;                           // Expiration time (In hindsight, it should be named T)
+        mutable HestonParameters params;    // Parameters
+        double alpha;                       // Dampening factor within FFT
 
-        /* Kokkos functions */
+        /* FFT pricing helpers */
         KOKKOS_INLINE_FUNCTION Complex heston_characteristic(Complex u) const;
         KOKKOS_INLINE_FUNCTION Complex damped_call(Complex v) const;
 
         /* Black-Scholes formula related stuff for implied volatility */
-        KOKKOS_INLINE_FUNCTION double std_normal_cdf(double x) const  
-            {return 0.5 * (1 + Kokkos::erf(x * 0.70710678118654752));}
-
-        KOKKOS_INLINE_FUNCTION double std_normal_dist(double x) const 
-            {return 0.39894228040143268 * Kokkos::exp(-0.5*x*x);}
-
+        KOKKOS_INLINE_FUNCTION double std_normal_cdf(double x) const    {return 0.5 * (1 + Kokkos::erf(x * 0.70710678118654752));}
+        KOKKOS_INLINE_FUNCTION double std_normal_dist(double x) const   {return 0.39894228040143268 * Kokkos::exp(-0.5*square(x));}
         KOKKOS_INLINE_FUNCTION double _black_scholes(double S, double K, double sigma, double tau) const;
         KOKKOS_INLINE_FUNCTION double _vega(double S, double K, double sigma, double tau) const;
 };
-
-
-HestonParameters Heston_FFT::diff_EV_calibration(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, 
-                                    ParameterBounds bounds=ParameterBounds(), Diff_EV_config config=Diff_EV_config(),
-                                    unsigned int seed=12345)
-{
-    // Variables
-    unsigned int population_size = config.population_size; 
-    Kokkos::Random_XorShift64_Pool<> rand_pool(seed);
-    Kokkos::View<HestonParameters*> population("population", population_size);
-    Kokkos::View<double*> losses("calibration_losses", population_size);
-
-    // Initialize population
-    Kokkos::parallel_for("init_population", population_size, 
-        KOKKOS_CLASS_LAMBDA(unsigned int k) {
-
-            // Initialize random state
-            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
-
-            // Initialize population randomly
-            population(k).v0 = generator.drand()*(bounds.v0_max - bounds.v0_min);
-            population(k).kappa = generator.drand()*(bounds.kappa_max - bounds.kappa_min);
-            population(k).theta = generator.drand()*(bounds.theta_max - bounds.theta_min);
-            population(k).rho = generator.drand()*(bounds.rho_max - bounds.rho_min);
-            population(k).sigma = generator.drand()*(bounds.sigma_max - bounds.sigma_min);
-
-            // Free the random state 
-            rand_pool.free_state(generator);
-        });
-    Kokkos::fence();
-    
-
-    /*
-    // Evaluate inital population performance
-    Kokkos::parallel_for("init_losses", population_size, 
-        KOKKOS_CLASS_LAMBDA(unsigned int k) {
-
-            this->update_parameters(population(k));
-            losses(k) = this->price_sq_loss(call_prices, K);
-
-        });
-    */
-
-    // TODO
-    return HestonParameters();
-}
 
 
 /* Heston Characteristic functions */
@@ -218,7 +169,7 @@ KOKKOS_INLINE_FUNCTION Complex Heston_FFT::damped_call(Complex v) const
 
 
 /* Call price computation */
-Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, unsigned int grid_points=8192, bool print=false)
+Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, unsigned int grid_points=8192, bool print=false) const
 {
     // FFT setup
     double eta = 0.2;   // Step-size in damped Fourier space
@@ -280,7 +231,7 @@ Kokkos::View<double*> Heston_FFT::call_prices(Kokkos::View<double*> strikes, uns
 }
 
 /* Put price computation from duality */
-Kokkos::View<double*> Heston_FFT::put_prices(Kokkos::View<double*> strikes, unsigned int grid_points=8192, bool print=false)
+Kokkos::View<double*> Heston_FFT::put_prices(Kokkos::View<double*> strikes, unsigned int grid_points=8192, bool print=false) const
 {
     // Compute call prices 
     Kokkos::View<double*> prices = call_prices(strikes, grid_points, false);
@@ -312,13 +263,6 @@ KOKKOS_INLINE_FUNCTION double Heston_FFT::_black_scholes(double S, double K, dou
     double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*square(sigma))) / (sigma * Kokkos::sqrt(tau));
     double d_minus = d_plus - sigma*Kokkos::sqrt(tau);
     return S*std_normal_cdf(d_plus) - std_normal_cdf(d_minus)*(K*Kokkos::exp(-r*tau));
-}
-
-/* */
-KOKKOS_INLINE_FUNCTION double Heston_FFT::_vega(double S, double K, double sigma, double tau) const
-{
-    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*square(sigma))) / (sigma * Kokkos::sqrt(tau));
-    return S*std_normal_dist(d_plus)*Kokkos::sqrt(tau);
 }
 
 /* */
@@ -389,6 +333,13 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
     }
 
     return implied_vols;
+}
+
+/* Vega computation */
+KOKKOS_INLINE_FUNCTION double Heston_FFT::_vega(double S, double K, double sigma, double tau) const
+{
+    double d_plus = (Kokkos::log(S/K) + tau*(r + 0.5*square(sigma))) / (sigma * Kokkos::sqrt(tau));
+    return S*std_normal_dist(d_plus)*Kokkos::sqrt(tau);
 }
 
 Kokkos::View<double*> Heston_FFT::market_vega(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, 
@@ -470,6 +421,146 @@ double Heston_FFT::implied_vol_sq_loss(Kokkos::View<double*> call_prices, Kokkos
     return loss;
 }
 
+/* Differential Evolution calibration */
+HestonParameters Heston_FFT::diff_EV_calibration(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, 
+                                    ParameterBounds bounds=ParameterBounds(), Diff_EV_config config=Diff_EV_config(),
+                                    unsigned int seed=12345)
+{
+    // Variables
+    unsigned int population_size = config.population_size; 
+    Kokkos::Random_XorShift64_Pool<> rand_pool(seed);
+    Kokkos::View<HestonParameters*> population("population", population_size);
+    Kokkos::View<HestonParameters*> mutations("mutations", population_size);
+    Kokkos::View<double*> population_losses("calibration_losses", population_size);
+    Kokkos::View<double*> mutation_losses("calibration_losses", population_size);
+
+    // Mirrors
+    Kokkos::View<HestonParameters*>::HostMirror h_population = Kokkos::create_mirror_view(population);
+    Kokkos::View<HestonParameters*>::HostMirror h_mutations = Kokkos::create_mirror_view(mutations);
+    Kokkos::View<double*>::HostMirror h_population_losses = Kokkos::create_mirror_view(population_losses);
+    Kokkos::View<double*>::HostMirror h_mutation_losses = Kokkos::create_mirror_view(mutation_losses);
+
+    // Initialize population
+    Kokkos::parallel_for("init_population", population_size, 
+        KOKKOS_CLASS_LAMBDA(unsigned int k) {
+
+            // Initialize random state
+            Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+            // Initialize population randomly
+            population(k).v0 = bounds.v0_min + generator.drand()*(bounds.v0_max - bounds.v0_min);
+            population(k).kappa = bounds.kappa_min + generator.drand()*(bounds.kappa_max - bounds.kappa_min);
+            population(k).theta = bounds.theta_min + generator.drand()*(bounds.theta_max - bounds.theta_min);
+            population(k).rho = bounds.rho_min + generator.drand()*(bounds.rho_max - bounds.rho_min);
+            population(k).sigma = bounds.sigma_min + generator.drand()*(bounds.sigma_max - bounds.sigma_min);
+
+            // Free the random state 
+            rand_pool.free_state(generator);
+        });
+    Kokkos::fence();
+
+    // Sync population with host
+    Kokkos::deep_copy(h_population, population);
+
+    // Evaluate inital population performance (launching kernels from host due to `warning #20011-D`)
+    for (unsigned int k = 0; k < population_size; k++) {
+        this->update_parameters(h_population(k));
+        h_population_losses(k) = this->implied_vol_sq_loss(call_prices, K);
+    }
+
+    // Differential Evolution loop
+    for (unsigned int gen = 0; gen < config.n_gen; gen++) {
+
+        // Mutation generation (on device)
+        Kokkos::parallel_for("mutation_generation", population_size,
+            KOKKOS_CLASS_LAMBDA(unsigned int k) {
+
+                // Initialize random state
+                Kokkos::Random_XorShift64_Pool<>::generator_type generator = rand_pool.get_state();
+
+                // Pick 3 distinct random candidate indices (wasting compute cycles for now but just making sure the algorithm is correct)
+                int a, b, c;
+                do {a = static_cast<unsigned int>(generator.drand()*population_size);} while (a == k);
+                do {b = static_cast<unsigned int>(generator.drand()*population_size);} while (b == k || a == b);
+                do {c = static_cast<unsigned int>(generator.drand()*population_size);} while (c == k || c == b || c == a);
+
+                // Random dimensionality index (within 5 Heston parameters)
+                unsigned int R = static_cast<unsigned int>(generator.drand() * 5);
+
+                // Mutation of each dimension (parameters)
+                for (unsigned int j = 0; j < 5; j++) {
+
+                    if (generator.drand(0,1) < config.crossover_prob || j == R) {
+                        switch (j) {
+                            case 0: mutations(k).v0 = Kokkos::clamp(population(a).v0 + config.weight*(population(b).v0 - population(c).v0), 
+                                                                    bounds.v0_min, 
+                                                                    bounds.v0_max); 
+                                break;
+                            case 1: mutations(k).kappa = Kokkos::clamp(population(a).kappa + config.weight*(population(b).kappa - population(c).kappa), 
+                                                                    bounds.kappa_min, 
+                                                                    bounds.kappa_max);
+                                break;
+                            case 2: mutations(k).theta = Kokkos::clamp(population(a).theta + config.weight*(population(b).theta - population(c).theta), 
+                                                                    bounds.theta_min, 
+                                                                    bounds.theta_max);
+                                break;
+                            case 3: mutations(k).rho = Kokkos::clamp(population(a).rho + config.weight*(population(b).rho - population(c).rho), 
+                                                                    bounds.rho_min, 
+                                                                    bounds.rho_max);
+                                break;
+                            case 4: mutations(k).sigma = Kokkos::clamp(population(a).sigma + config.weight*(population(b).sigma - population(c).sigma), 
+                                                                    bounds.sigma_min, 
+                                                                    bounds.sigma_max);
+                                break;
+                        }
+                    } else {
+                        switch (j) {
+                            case 0: mutations(k).v0 = population(k).v0; break;
+                            case 1: mutations(k).kappa = population(k).kappa; break;
+                            case 2: mutations(k).theta = population(k).theta; break;
+                            case 3: mutations(k).rho = population(k).rho; break;
+                            case 4: mutations(k).sigma = population(k).sigma; break;
+                        }
+                    }
+                }
+                
+                // Free the random state 
+                rand_pool.free_state(generator);
+            });
+            Kokkos::fence();
+        
+        // Evaluating mutations (again, copy back top host to launch kernels) 
+        Kokkos::deep_copy(h_mutations, mutations);
+        for (unsigned int k = 0; k < population_size; k++) {
+            this->update_parameters(h_mutations(k));
+            h_mutation_losses(k) = this->implied_vol_sq_loss(call_prices, K);
+        }
+        Kokkos::deep_copy(mutation_losses, h_mutation_losses);
+
+        // Update
+        Kokkos::parallel_for("update_populations", population_size, 
+            KOKKOS_LAMBDA(const int k) {
+                if (mutation_losses(k) < population_losses(k)) {
+                    population(k) = mutations(k);
+                    population_losses(k) = mutation_losses(k);
+                }
+            });
+        Kokkos::deep_copy(population_losses, h_population_losses);
+    }
+
+    // Selecting best index
+    Kokkos::deep_copy(h_population_losses, population_losses);
+    Kokkos::deep_copy(h_population, population);
+    unsigned int best_index = 0;
+    for (unsigned int k = 1; k < population_size; k++) {
+        if (h_population_losses(k) < h_population_losses(best_index)) 
+            best_index = k;
+    }
+
+    // Return best parameter
+    return h_population(best_index);
+}
+
 // ------------------------------------------------------------------------------------ //
 int main(int argc, char* argv[])
 {
@@ -518,7 +609,17 @@ int main(int argc, char* argv[])
         Kokkos::View<double*> iv_Heston = solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
 
 
-
+        // Calibration
+        HestonParameters cal_param = solver.diff_EV_calibration(test_prices, strikes);
+        solver.update_parameters(cal_param);
+        std::cout << "v0: " << cal_param.v0 << std::endl
+                << "kappa: " << cal_param.kappa << std::endl
+                << "theta: " << cal_param.theta << std::endl
+                << "rho: " << cal_param.rho << std::endl
+                << "sigma: " << cal_param.sigma << std::endl << std::endl;
+    
+        call_prices = solver.call_prices(strikes, N);
+        solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
     }
     Kokkos::finalize();
 
