@@ -4,3 +4,4 @@
 4. https://quant.stackexchange.com/questions/7761/a-simple-formula-for-calculating-implied-volatility 
 5. The particle swarm - explosion, stability, and convergence in a multidimensional complex space https://ieeexplore.ieee.org/document/985692 
 6. https://machinelearningmastery.com/a-gentle-introduction-to-particle-swarm-optimization/ 
+7. https://machinelearningmastery.com/differential-evolution-from-scratch-in-python/ 
