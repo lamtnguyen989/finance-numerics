@@ -65,7 +65,7 @@ struct Diff_EV_config
 
     Diff_EV_config()    // Wikipedia suggested parameters for empty constructor
         : population_size(50) , crossover_prob(0.9) , weight(0.8)
-        , n_gen(100) , tolerance(EPSILON)
+        , n_gen(20) , tolerance(EPSILON)
         {}
 };
 
@@ -100,6 +100,7 @@ class Heston_FFT
         /* Implied volatility */
         Kokkos::View<double*> implied_volatility(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, unsigned int max_iter, double epsilon, bool print);
         Kokkos::View<double*> market_vega(Kokkos::View<double*> call_prices, Kokkos::View<double*> K, unsigned int max_iter, double epsilon, bool print);
+        Kokkos::View<double**> iv_surface(Kokkos::View<double*> K, Kokkos::View<double*> times, unsigned int max_iter, double epsilon);
 
         /* Loss functions for calibration */
         double price_vega_weighted_loss(Kokkos::View<double*> call_prices, Kokkos::View<double*> K);
@@ -333,6 +334,16 @@ Kokkos::View<double*> Heston_FFT::implied_volatility(Kokkos::View<double*> call_
     }
 
     return implied_vols;
+}
+
+/* Implied volatility surface */
+Kokkos::View<double**> Heston_FFT::iv_surface(Kokkos::View<double*> K, Kokkos::View<double*> times, unsigned int max_iter, double epsilon)
+{
+    unsigned int n_strikes = K.extent(0);
+    unsigned int n_times = times.extent(0);
+    Kokkos::View<double**> iv_surf("iv_surface", n_strikes, n_times);
+
+    return iv_surf;
 }
 
 /* Vega computation */
@@ -619,7 +630,7 @@ int main(int argc, char* argv[])
                 << "sigma: " << cal_param.sigma << std::endl << std::endl;
     
         call_prices = solver.call_prices(strikes, N);
-        solver.implied_volatility(call_prices, strikes, 20, 1e-15, true);
+        solver.implied_volatility(test_prices, strikes, 20, 1e-15, true);
     }
     Kokkos::finalize();
 
